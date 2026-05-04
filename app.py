@@ -2735,6 +2735,7 @@ def append_csv_row(path: str, fieldnames, row: dict):
 
 PUBLIC_USAGE_FIELDS = [
     "timestamp_date",
+    "created_at_madrid",
     "access_type",
     "mode",
     "analysis_status",
@@ -2857,6 +2858,7 @@ def public_usage_row(
 ) -> dict:
     return {
         "timestamp_date": today_iso(),
+        "created_at_madrid": now_iso(),
         "access_type": access_type,
         "mode": mode,
         "analysis_status": analysis_status,
