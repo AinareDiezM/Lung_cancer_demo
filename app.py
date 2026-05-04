@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import cv2
 import numpy as np
@@ -2712,12 +2713,15 @@ CUSTOM_OBJECTS_CLS = {
 # =========================================================
 # ACCESS HELPERS
 # =========================================================
+APP_TIMEZONE = ZoneInfo("Europe/Madrid")
+
+
 def now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now(APP_TIMEZONE).isoformat(timespec="seconds")
 
 
 def today_iso() -> str:
-    return datetime.now().date().isoformat()
+    return datetime.now(APP_TIMEZONE).date().isoformat()
 
 
 def append_csv_row(path: str, fieldnames, row: dict):
