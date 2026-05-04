@@ -4861,9 +4861,10 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
         render_segmentation_analysis_design(result)
 
     elif mode == "classification":
-        render_section_intro(
-            "Classification output",
-            "Full-image histological subtype prediction from the uploaded MRI image."
+        st.markdown('<div class="seg-analysis-title">CLASSIFICATION ANALYSIS</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="seg-analysis-subtitle">Full-image histological subtype prediction from the uploaded MRI image.</div>',
+            unsafe_allow_html=True
         )
 
         top_left, top_right = st.columns([1.04, 1.0], gap="medium")
@@ -4913,10 +4914,10 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
         st.plotly_chart(build_cls_metrics_chart(), use_container_width=True)
 
     elif mode == "pipeline":
-        render_section_intro(
-            "Full pipeline output",
-            "Combined localisation and final subtype prediction from the integrated end-to-end workflow."
-        )
+        st.markdown('<div class="seg-analysis-title">COMPLETE PIPELINE ANALYSIS</div>', unsafe_allow_html=True)
+        st.markdown('<div class="seg-analysis-subtitle">Combined tumour localisation and final subtype prediction from the integrated end-to-end workflow.</div>',
+                    unsafe_allow_html=True
+                    )
 
         render_status_banner(
             detected=result["tumour_detected"],
