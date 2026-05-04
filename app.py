@@ -2716,6 +2716,10 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def today_iso() -> str:
+    return datetime.now().date().isoformat()
+
+
 def append_csv_row(path: str, fieldnames, row: dict):
     file_exists = os.path.exists(path)
     with open(path, "a", newline="", encoding="utf-8") as f:
@@ -2723,6 +2727,22 @@ def append_csv_row(path: str, fieldnames, row: dict):
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+
+
+PUBLIC_USAGE_FIELDS = [
+    "timestamp_date",
+    "access_type",
+    "mode",
+    "analysis_status",
+    "tumour_detected",
+    "classification_performed",
+    "predicted_subtype",
+    "confidence_range",
+    "tumour_area_range",
+    "error_type",
+]
+
+LOCAL_USER_FIELDS = ["created_at", "username", "account_type", "salt", "password_hash"]
 
 
 def normalise_username(username: str) -> str:
@@ -2742,10 +2762,134 @@ def make_password_hash(password: str, salt: str = None):
     return salt, password_hash
 
 
+def supabase_enabled() -> bool:
+    try:
+        supabase_cfg = st.secrets.get("supabase", {})
+        return bool(supabase_cfg.get("url") and supabase_cfg.get("key"))
+    except Exception:
+        return False
+
+
+@st.cache_resource(show_spinner=False)
+def get_supabase_client():
+    from supabase import create_client
+
+    supabase_cfg = st.secrets["supabase"]
+    return create_client(supabase_cfg["url"], supabase_cfg["key"])
+
+
+def insert_supabase_row(table_name: str, row: dict) -> bool:
+    if not supabase_enabled():
+        return False
+    try:
+        get_supabase_client().table(table_name).insert(row).execute()
+        return True
+    except Exception:
+        # Keep the app usable even if remote logging is temporarily unavailable.
+        return False
+
+
+def fetch_supabase_rows(table_name: str, columns: str = "*") -> list:
+    if not supabase_enabled():
+        return []
+    try:
+        response = get_supabase_client().table(table_name).select(columns).execute()
+        return response.data or []
+    except Exception:
+        return []
+
+
+def clean_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value in ("True", "true", "1", 1):
+        return True
+    if value in ("False", "false", "0", 0):
+        return False
+    return None
+
+
+def confidence_to_range(value) -> str:
+    try:
+        if value is None or value == "":
+            return ""
+        v = float(value)
+        if v > 1.0:
+            v = v / 100.0
+        v = max(0.0, min(1.0, v))
+        if v == 1.0:
+            return "0.9-1.0"
+        lower = int(v * 10) / 10
+        upper = lower + 0.1
+        return f"{lower:.1f}-{upper:.1f}"
+    except Exception:
+        return ""
+
+
+def tumour_area_to_range(value) -> str:
+    try:
+        if value is None or value == "":
+            return ""
+        area = int(float(value))
+        if area <= 0:
+            return "0 px"
+        lower = (area // 100) * 100
+        upper = lower + 100
+        return f"{lower}-{upper} px"
+    except Exception:
+        return ""
+
+
+def public_usage_row(
+    access_type: str,
+    mode: str,
+    analysis_status: str,
+    tumour_detected=None,
+    classification_performed=None,
+    predicted_subtype: str = "",
+    confidence_range: str = "",
+    tumour_area_range: str = "",
+    error_type: str = "",
+) -> dict:
+    return {
+        "timestamp_date": today_iso(),
+        "access_type": access_type,
+        "mode": mode,
+        "analysis_status": analysis_status,
+        "tumour_detected": clean_bool(tumour_detected),
+        "classification_performed": clean_bool(classification_performed),
+        "predicted_subtype": predicted_subtype or "",
+        "confidence_range": confidence_range or "",
+        "tumour_area_range": tumour_area_range or "",
+        "error_type": error_type or "",
+    }
+
+
+def store_usage_row(row: dict):
+    # Primary storage: Supabase table app_usage_log.
+    # Fallback storage: local anonymised CSV, useful for local tests without secrets.
+    if not insert_supabase_row("app_usage_log", row):
+        append_csv_row(ANALYSIS_LOG_PATH, PUBLIC_USAGE_FIELDS, row)
+
+
 def load_local_user_accounts() -> dict:
+    users = {}
+
+    supabase_rows = fetch_supabase_rows(
+        "user_accounts",
+        "username,account_type,salt,password_hash,created_at",
+    )
+    for row in supabase_rows:
+        username = normalise_username(row.get("username", ""))
+        if username:
+            users[username] = row
+
+    if users:
+        return users
+
     if not os.path.exists(USER_ACCOUNTS_PATH):
         return {}
-    users = {}
+
     with open(USER_ACCOUNTS_PATH, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -2757,16 +2901,25 @@ def load_local_user_accounts() -> dict:
 
 def create_local_user_account(username: str, password: str):
     salt, password_hash = make_password_hash(password)
-    append_csv_row(
-        USER_ACCOUNTS_PATH,
-        ["created_at", "username", "salt", "password_hash"],
-        {
-            "created_at": now_iso(),
-            "username": username,
-            "salt": salt,
-            "password_hash": password_hash,
-        },
-    )
+    row = {
+        "username": username,
+        "account_type": "registered_user",
+        "salt": salt,
+        "password_hash": password_hash,
+    }
+
+    if not insert_supabase_row("user_accounts", row):
+        append_csv_row(
+            USER_ACCOUNTS_PATH,
+            LOCAL_USER_FIELDS,
+            {
+                "created_at": now_iso(),
+                "username": username,
+                "account_type": "registered_user",
+                "salt": salt,
+                "password_hash": password_hash,
+            },
+        )
 
 
 def validate_new_account(username: str, password: str, confirm_password: str):
@@ -2802,15 +2955,13 @@ def authenticate_user(username: str, password: str) -> bool:
 
 
 def log_access(username: str, access_type: str):
-    append_csv_row(
-        ACCESS_LOG_PATH,
-        ["timestamp", "username", "access_type", "session_id"],
-        {
-            "timestamp": now_iso(),
-            "username": username,
-            "access_type": access_type,
-            "session_id": get_or_create_session_id(),
-        },
+    # Username and session_id are intentionally not stored in the public usage table.
+    store_usage_row(
+        public_usage_row(
+            access_type=access_type,
+            mode="access",
+            analysis_status="access_granted",
+        )
     )
 
 
@@ -2818,29 +2969,41 @@ def log_analysis_if_enabled(mode: str, result: dict):
     if not st.session_state.get("save_metrics_opt_in", False):
         return
 
-    append_csv_row(
-        ANALYSIS_LOG_PATH,
-        [
-            "timestamp", "username", "access_type", "session_id", "mode",
-            "tumour_detected", "tumour_area_px", "mean_mask_confidence",
-            "predicted_subtype", "prediction_confidence", "adc_probability",
-            "scc_probability", "decision_source",
-        ],
-        {
-            "timestamp": now_iso(),
-            "username": st.session_state.get("username", "unknown"),
-            "access_type": st.session_state.get("access_type", "unknown"),
-            "session_id": get_or_create_session_id(),
-            "mode": mode,
-            "tumour_detected": result.get("tumour_detected", ""),
-            "tumour_area_px": result.get("total_pixels", ""),
-            "mean_mask_confidence": result.get("mean_mask_conf", ""),
-            "predicted_subtype": result.get("pred_label", ""),
-            "prediction_confidence": result.get("pred_conf", ""),
-            "adc_probability": result.get("prob_adc", result.get("prob_adc_final", "")),
-            "scc_probability": result.get("prob_scc", result.get("prob_scc_final", "")),
-            "decision_source": result.get("decision_source", ""),
-        },
+    classification_performed = result.get("classification_performed", "")
+    if classification_performed is False:
+        analysis_status = "classification_not_performed"
+    else:
+        analysis_status = result.get("analysis_status", "success")
+
+    pred_label = result.get("pred_label", "")
+    pred_conf = result.get("pred_conf", "")
+
+    store_usage_row(
+        public_usage_row(
+            access_type=st.session_state.get("access_type", "unknown"),
+            mode=mode,
+            analysis_status=analysis_status,
+            tumour_detected=result.get("tumour_detected", ""),
+            classification_performed=classification_performed,
+            predicted_subtype=pred_label,
+            confidence_range=confidence_to_range(pred_conf),
+            tumour_area_range=tumour_area_to_range(result.get("total_pixels", "")),
+            error_type=result.get("error_type", ""),
+        )
+    )
+
+
+def log_analysis_error(mode: str, error: Exception):
+    if not st.session_state.get("save_metrics_opt_in", False):
+        return
+
+    store_usage_row(
+        public_usage_row(
+            access_type=st.session_state.get("access_type", "unknown"),
+            mode=mode,
+            analysis_status="error",
+            error_type=type(error).__name__,
+        )
     )
 
 
@@ -3030,83 +3193,12 @@ def run_classification_direct(img_orig: np.ndarray) -> dict:
         "threshold_used": FINAL_CLS_THRESHOLD,
     }
 
-def run_classification_with_segmentation_gate(img_orig: np.ndarray) -> dict:
-    """
-    Runs segmentation first. The ADC/SCC classifier is only executed if the
-    segmentation output contains a reliable tumour region according to the
-    same active-pixel criterion used in segmentation mode.
-    """
-    seg_result = run_segmentation(img_orig)
-    img_resized = cv2.resize(img_orig, CLS_INPUT_SIZE, interpolation=cv2.INTER_AREA)
-
-    if not seg_result["tumour_detected"]:
-        result = seg_result.copy()
-        result.update({
-            "roi": img_resized,
-            "classification_performed": False,
-            "prob_scc": None,
-            "prob_adc": None,
-            "pred_class": None,
-            "pred_label": NEGATIVE_LABEL,
-            "pred_conf": 0.0,
-            "decision_source": "Segmentation gate",
-            "threshold_used": FINAL_CLS_THRESHOLD,
-            "classification_note": (
-                f"No reliable tumour region was detected "
-                f"({seg_result['total_pixels']} active pixels; minimum required: {MIN_ACTIVE_PIXELS}). "
-                "Subtype classification was not performed."
-            ),
-        })
-        return result
-
-    cls_result = run_classification_direct(img_orig)
-    cls_result.update({
-        "classification_performed": True,
-        "tumour_detected": True,
-        "total_pixels": seg_result["total_pixels"],
-        "mean_mask_conf": seg_result["mean_mask_conf"],
-        "img_256": seg_result["img_256"],
-        "seg_pred": seg_result["seg_pred"],
-        "bin_mask": seg_result["bin_mask"],
-        "overlay_img": seg_result["overlay_img"],
-        "components": seg_result["components"],
-        "seg_postproc_note": seg_result["seg_postproc_note"],
-        "classification_note": (
-            "A reliable tumour region was detected by the segmentation gate. "
-            "Subtype classification was performed on the full image."
-        ),
-    })
-    return cls_result
-
 def run_pipeline_final(img_orig: np.ndarray) -> dict:
     seg_result = run_segmentation(img_orig)
-
-    if not seg_result["tumour_detected"]:
-        result = seg_result.copy()
-        result.update({
-            "classification_performed": False,
-            "prob_scc_full": None,
-            "prob_adc_full": None,
-            "prob_scc_final": None,
-            "prob_adc_final": None,
-            "pred_class": None,
-            "pred_label": NEGATIVE_LABEL,
-            "pred_conf": 0.0,
-            "decision_source": "Segmentation gate",
-            "threshold_used": FINAL_CLS_THRESHOLD,
-            "pipeline_note": (
-                f"No reliable tumour region was detected "
-                f"({seg_result['total_pixels']} active pixels; minimum required: {MIN_ACTIVE_PIXELS}). "
-                "Subtype classification was not performed."
-            ),
-        })
-        return result
-
     cls_result = run_classification_direct(img_orig)
 
     result = seg_result.copy()
     result.update({
-        "classification_performed": True,
         "prob_scc_full": cls_result["prob_scc"],
         "prob_adc_full": cls_result["prob_adc"],
         "prob_scc_final": cls_result["prob_scc"],
@@ -3114,9 +3206,9 @@ def run_pipeline_final(img_orig: np.ndarray) -> dict:
         "pred_class": cls_result["pred_class"],
         "pred_label": cls_result["pred_label"],
         "pred_conf": cls_result["pred_conf"],
-        "decision_source": "Full-image classifier after segmentation gate",
+        "decision_source": "Full-image classifier after segmentation",
         "threshold_used": FINAL_CLS_THRESHOLD,
-        "pipeline_note": "A reliable tumour region was detected. Final subtype decision uses the full-image classifier.",
+        "pipeline_note": "Segmentation is used for localisation only. Final subtype decision uses the full-image classifier.",
     })
     return result
 
@@ -4193,7 +4285,7 @@ def page_login():
             if st.button("🔒  Sign in", key="btn_login", type="primary", use_container_width=True):
                 username_clean = normalise_username(username)
                 if authenticate_user(username_clean, password):
-                    start_authenticated_session(username_clean, "registered_user")
+                    start_authenticated_session(username_clean, "registered_existing_user")
                     st.rerun()
                 else:
                     st.error("Incorrect username or password.")
@@ -4214,7 +4306,7 @@ def page_login():
                     st.error(message)
                 else:
                     create_local_user_account(username_clean, new_password)
-                    start_authenticated_session(username_clean, "registered_user_created_account")
+                    start_authenticated_session(username_clean, "registered_new_user")
                     st.success("Account created successfully.")
                     st.rerun()
 
@@ -4906,8 +4998,8 @@ def _execute_analysis(img_orig: np.ndarray, mode: str):
             with st.spinner("Running segmentation model…"):
                 result = run_segmentation(img_orig)
         elif mode == "classification":
-            with st.spinner("Checking tumour presence before classification…"):
-                result = run_classification_with_segmentation_gate(img_orig)
+            with st.spinner("Running classification model on full image…"):
+                result = run_classification_direct(img_orig)
         elif mode == "pipeline":
             with st.spinner("Running full pipeline…"):
                 result = run_pipeline_final(img_orig)
@@ -4920,6 +5012,7 @@ def _execute_analysis(img_orig: np.ndarray, mode: str):
         st.rerun()
 
     except Exception as e:
+        log_analysis_error(mode, e)
         st.session_state.analysis_done = False
         st.session_state.analysis_result = None
         st.error(f"Analysis error: {e}")
@@ -4932,43 +5025,10 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
         render_segmentation_analysis_design(result)
 
     elif mode == "classification":
-        st.markdown('<div class="seg-analysis-title">CLASSIFICATION ANALYSIS</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="seg-analysis-subtitle">Full-image histological subtype prediction from the uploaded MRI image.</div>',
-            unsafe_allow_html=True
+        render_section_intro(
+            "Classification output",
+            "Full-image histological subtype prediction from the uploaded MRI image."
         )
-
-        if not result.get("classification_performed", True):
-            render_status_banner(
-                detected=False,
-                positive_title="🔴 Tumour region detected",
-                positive_desc="A reliable tumour region was detected and subtype classification can be performed.",
-                negative_title="🟢 No reliable tumour detected",
-                negative_desc="The segmentation gate did not detect a reliable tumour region, so subtype classification was not performed.",
-            )
-
-            c1, c2, c3 = st.columns([1.0, 1.0, 1.28], gap="medium")
-            with c1:
-                render_visual_card("Input image", result["img_256"], "Preprocessed image")
-            with c2:
-                render_visual_card("Predicted mask", result["bin_mask"] * 255, "Segmentation gate output")
-            with c3:
-                render_visual_card("Overlay", result["overlay_img"], "Mask highlighted on the input image", large=True)
-
-            render_metrics_table(
-                "Classification gate summary",
-                "Subtype classification was skipped because no reliable tumour region was detected.",
-                [
-                    ("Tumour status", "Not detected", "Segmentation-stage status after thresholding and postprocessing."),
-                    ("Tumour area", f'{result["total_pixels"]} px', "Segmented active area retained in the final mask."),
-                    ("Minimum required area", f"{MIN_ACTIVE_PIXELS} px", "Minimum number of active pixels required to allow subtype classification."),
-                    ("Classification result", "Not performed", "The ADC/SCC classifier was not applied because no reliable tumour was detected."),
-                    ("Decision source", result["decision_source"], "Rule used to decide whether classification should be performed."),
-                    ("Segmentation logic", result["seg_postproc_note"], "Thresholding and postprocessing configuration used for the localisation stage."),
-                ]
-            )
-
-            return
 
         top_left, top_right = st.columns([1.04, 1.0], gap="medium")
         with top_left:
@@ -5017,18 +5077,17 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
         st.plotly_chart(build_cls_metrics_chart(), use_container_width=True)
 
     elif mode == "pipeline":
-        st.markdown('<div class="seg-analysis-title">COMPLETE PIPELINE ANALYSIS</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="seg-analysis-subtitle">Combined tumour localisation and final subtype prediction from the integrated end-to-end workflow.</div>',
-            unsafe_allow_html=True
+        render_section_intro(
+            "Full pipeline output",
+            "Combined localisation and final subtype prediction from the integrated end-to-end workflow."
         )
 
         render_status_banner(
             detected=result["tumour_detected"],
             positive_title="🔴 Tumour region detected",
             positive_desc="The segmentation model detected a lesion. Segmentation is used for localisation, while the final subtype decision comes from full-image classification.",
-            negative_title="🟢 No reliable tumour detected",
-            negative_desc="No reliable tumour mask was detected. Subtype classification was not performed.",
+            negative_title="🟢 No tumour detected",
+            negative_desc="No reliable tumour mask was detected. The final subtype decision still comes from the full-image classifier.",
         )
 
         c1, c2, c3 = st.columns([1.0, 1.0, 1.28], gap="medium")
@@ -5038,26 +5097,6 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
             render_visual_card("Predicted mask", result["bin_mask"] * 255, "Segmentation output")
         with c3:
             render_visual_card("Overlay", result["overlay_img"], "Mask highlighted on the input image", large=True)
-
-        if not result.get("classification_performed", True):
-            render_metrics_table(
-                "Pipeline summary metrics",
-                "The pipeline stopped after the segmentation gate because no reliable tumour region was detected.",
-                [
-                    ("Tumour status", "Not detected", "Segmentation-stage status after thresholding and postprocessing."),
-                    ("Input resolution", result.get("input_resolution", "—"), "Resolution of the uploaded MRI image before internal preprocessing."),
-                    ("Predicted subtype", NEGATIVE_LABEL, "No histological subtype was assigned because classification was not performed."),
-                    ("Classification result", "Not performed", "The ADC/SCC classifier was skipped because no reliable tumour was detected."),
-                    ("Tumour area", f'{result["total_pixels"]} px', "Segmented active area retained in the final mask."),
-                    ("Minimum required area", f"{MIN_ACTIVE_PIXELS} px", "Minimum number of active pixels required to continue to classification."),
-                    ("Mask confidence", f'{result["mean_mask_conf"]:.3f}', "Average mask probability inside the segmented tumour region."),
-                    ("Detected components", str(component_count(result.get("components"))), "Connected components found above the minimum area threshold before optional LCC selection."),
-                    ("Decision source", result["decision_source"], "Inference rule used to stop or continue the workflow."),
-                    ("Segmentation logic", result["seg_postproc_note"], "Thresholding and postprocessing configuration used for the localisation stage."),
-                ]
-            )
-
-            return
 
         lower_left, lower_right = st.columns([0.95, 1.05], gap="medium")
         with lower_left:

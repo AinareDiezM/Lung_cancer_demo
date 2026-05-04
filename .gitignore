@@ -9,3 +9,5 @@ venv/
 user_accounts.csv
 access_log.csv
 analysis_log.csv
+__pycache__/
+*.pyc
