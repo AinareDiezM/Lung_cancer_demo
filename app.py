@@ -2910,6 +2910,7 @@ def create_local_user_account(username: str, password: str):
         "account_type": "registered_user",
         "salt": salt,
         "password_hash": password_hash,
+        "created_at_madrid": now_iso(),
     }
 
     if not insert_supabase_row("user_accounts", row):
