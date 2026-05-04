@@ -9,3 +9,4 @@ pandas
 scikit-image
 scikit-learn
 matplotlib
+supabase
