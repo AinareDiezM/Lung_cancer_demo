@@ -3193,12 +3193,81 @@ def run_classification_direct(img_orig: np.ndarray) -> dict:
         "threshold_used": FINAL_CLS_THRESHOLD,
     }
 
+def run_classification_with_segmentation_gate(img_orig: np.ndarray) -> dict:
+    """
+    Runs segmentation first. Classification is only performed if a reliable
+    tumour region is detected according to the segmentation active-pixel criterion.
+    """
+    seg_result = run_segmentation(img_orig)
+    img_resized = cv2.resize(img_orig, CLS_INPUT_SIZE, interpolation=cv2.INTER_AREA)
+
+    if not seg_result["tumour_detected"]:
+        result = seg_result.copy()
+        result.update({
+            "roi": img_resized,
+            "classification_performed": False,
+            "prob_scc": None,
+            "prob_adc": None,
+            "pred_class": None,
+            "pred_label": NEGATIVE_LABEL,
+            "pred_conf": 0.0,
+            "decision_source": "Segmentation gate",
+            "threshold_used": FINAL_CLS_THRESHOLD,
+            "classification_note": (
+                f"No reliable tumour region was detected "
+                f"({seg_result['total_pixels']} active pixels; minimum required: {MIN_ACTIVE_PIXELS}). "
+                "Subtype classification was not performed."
+            ),
+        })
+        return result
+
+    cls_result = run_classification_direct(img_orig)
+    cls_result.update({
+        "classification_performed": True,
+        "tumour_detected": True,
+        "total_pixels": seg_result["total_pixels"],
+        "mean_mask_conf": seg_result["mean_mask_conf"],
+        "img_256": seg_result["img_256"],
+        "bin_mask": seg_result["bin_mask"],
+        "overlay_img": seg_result["overlay_img"],
+        "components": seg_result["components"],
+        "seg_postproc_note": seg_result["seg_postproc_note"],
+        "classification_note": (
+            "A reliable tumour region was detected by the segmentation gate. "
+            "Subtype classification was performed on the full image."
+        ),
+    })
+    return cls_result
+
 def run_pipeline_final(img_orig: np.ndarray) -> dict:
     seg_result = run_segmentation(img_orig)
+
+    if not seg_result["tumour_detected"]:
+        result = seg_result.copy()
+        result.update({
+            "classification_performed": False,
+            "prob_scc_full": None,
+            "prob_adc_full": None,
+            "prob_scc_final": None,
+            "prob_adc_final": None,
+            "pred_class": None,
+            "pred_label": NEGATIVE_LABEL,
+            "pred_conf": 0.0,
+            "decision_source": "Segmentation gate",
+            "threshold_used": FINAL_CLS_THRESHOLD,
+            "pipeline_note": (
+                f"No reliable tumour region was detected "
+                f"({seg_result['total_pixels']} active pixels; minimum required: {MIN_ACTIVE_PIXELS}). "
+                "Subtype classification was not performed."
+            ),
+        })
+        return result
+
     cls_result = run_classification_direct(img_orig)
 
     result = seg_result.copy()
     result.update({
+        "classification_performed": True,
         "prob_scc_full": cls_result["prob_scc"],
         "prob_adc_full": cls_result["prob_adc"],
         "prob_scc_final": cls_result["prob_scc"],
@@ -3206,12 +3275,11 @@ def run_pipeline_final(img_orig: np.ndarray) -> dict:
         "pred_class": cls_result["pred_class"],
         "pred_label": cls_result["pred_label"],
         "pred_conf": cls_result["pred_conf"],
-        "decision_source": "Full-image classifier after segmentation",
+        "decision_source": "Full-image classifier after segmentation gate",
         "threshold_used": FINAL_CLS_THRESHOLD,
-        "pipeline_note": "Segmentation is used for localisation only. Final subtype decision uses the full-image classifier.",
+        "pipeline_note": "A reliable tumour region was detected. Final subtype decision uses the full-image classifier.",
     })
     return result
-
 # =========================================================
 # CHART HELPERS
 # =========================================================
@@ -4998,8 +5066,8 @@ def _execute_analysis(img_orig: np.ndarray, mode: str):
             with st.spinner("Running segmentation model…"):
                 result = run_segmentation(img_orig)
         elif mode == "classification":
-            with st.spinner("Running classification model on full image…"):
-                result = run_classification_direct(img_orig)
+            with st.spinner("Checking tumour presence before classification…"):
+                result = run_classification_with_segmentation_gate(img_orig)
         elif mode == "pipeline":
             with st.spinner("Running full pipeline…"):
                 result = run_pipeline_final(img_orig)
@@ -5025,14 +5093,97 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
         render_segmentation_analysis_design(result)
 
     elif mode == "classification":
-        render_section_intro(
-            "Classification output",
-            "Full-image histological subtype prediction from the uploaded MRI image."
+        st.markdown(
+            '<div class="seg-analysis-title">CLASSIFICATION ANALYSIS</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="seg-analysis-subtitle">Full-image histological subtype prediction from the uploaded MRI image.</div>',
+            unsafe_allow_html=True,
         )
 
+        if not result.get("classification_performed", True):
+            render_status_banner(
+                detected=False,
+                positive_title="🔴 Tumour region detected",
+                positive_desc="A reliable tumour region was detected and subtype classification can be performed.",
+                negative_title="🟢 No reliable tumour detected",
+                negative_desc="The segmentation gate did not detect a reliable tumour region, so subtype classification was not performed.",
+            )
+
+            c1, c2, c3 = st.columns([1.0, 1.0, 1.28], gap="medium")
+
+            with c1:
+                render_visual_card(
+                    "Input image",
+                    result["img_256"],
+                    "Preprocessed image",
+                )
+
+            with c2:
+                render_visual_card(
+                    "Predicted mask",
+                    result["bin_mask"] * 255,
+                    "Segmentation gate output",
+                )
+
+            with c3:
+                render_visual_card(
+                    "Overlay",
+                    result["overlay_img"],
+                    "Mask highlighted on the input image",
+                    large=True,
+                )
+
+            render_metrics_table(
+                "Classification gate summary",
+                "Subtype classification was skipped because no reliable tumour region was detected.",
+                [
+                    (
+                        "Tumour status",
+                        "Not detected",
+                        "Segmentation-stage status after thresholding and postprocessing.",
+                    ),
+                    (
+                        "Tumour area",
+                        f'{result["total_pixels"]} px',
+                        "Segmented active area retained in the final mask.",
+                    ),
+                    (
+                        "Minimum required area",
+                        f"{MIN_ACTIVE_PIXELS} px",
+                        "Minimum number of active pixels required to allow subtype classification.",
+                    ),
+                    (
+                        "Classification result",
+                        "Not performed",
+                        "The ADC/SCC classifier was not applied because no reliable tumour was detected.",
+                    ),
+                    (
+                        "Decision source",
+                        result["decision_source"],
+                        "Rule used to decide whether classification should be performed.",
+                    ),
+                    (
+                        "Segmentation logic",
+                        result["seg_postproc_note"],
+                        "Thresholding and postprocessing configuration used for the localisation stage.",
+                    ),
+                ],
+            )
+
+            return
+
         top_left, top_right = st.columns([1.04, 1.0], gap="medium")
+
         with top_left:
-            render_visual_card("Input image", result["roi"], "Resized image used by the classifier", large=True)
+            render_visual_card(
+                "Input image",
+                result["roi"],
+                "Resized image used by the classifier",
+                large=True,
+            )
+
         with top_right:
             render_classification_hero(
                 result,
@@ -5044,10 +5195,15 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
 
         render_prob_panel(
             "Subtype probabilities",
-            "Model confidence distribution for ADC and SCC."
+            "Model confidence distribution for ADC and SCC.",
         )
+
         st.plotly_chart(
-            build_probability_bar(result["prob_adc"], result["prob_scc"], "Subtype probabilities"),
+            build_probability_bar(
+                result["prob_adc"],
+                result["prob_scc"],
+                "Subtype probabilities",
+            ),
             use_container_width=True,
         )
 
@@ -5055,31 +5211,79 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
             "Case metrics",
             "Integrated case-level prediction summary together with the reference classification performance descriptors.",
             [
-                ("Predicted subtype", result["pred_label"], "Histological subtype assigned by the final full-image classification branch."),
-                ("Input resolution", result.get("input_resolution", "—"), "Resolution of the uploaded MRI image before resizing for classifier inference."),
-                ("Prediction confidence", f'{result["pred_conf"]*100:.2f}%', "Probability associated with the winning class reported in the result panel."),
-                ("ADC probability", f'{result["prob_adc"]:.3f}', "Class probability assigned specifically to adenocarcinoma."),
-                ("SCC probability", f'{result["prob_scc"]:.3f}', "Class probability assigned specifically to squamous cell carcinoma."),
-                ("Decision threshold", f'{result["threshold_used"]:.2f}', "Probability threshold used to convert the raw output into the final class label."),
-                ("Decision source", result["decision_source"], "Model branch used to generate the reported final subtype."),
-                ("Accuracy", GLOBAL_CLS_ACC, "Overall proportion of correctly classified cases in the reference evaluation."),
-                ("Balanced Accuracy", GLOBAL_BAL_ACC, "Average sensitivity across both classes, reported to account for class imbalance."),
-                ("AUC", GLOBAL_AUC, "ROC-based separability measure summarising discrimination performance across thresholds."),
-            ]
+                (
+                    "Predicted subtype",
+                    result["pred_label"],
+                    "Histological subtype assigned by the final full-image classification branch.",
+                ),
+                (
+                    "Input resolution",
+                    result.get("input_resolution", "—"),
+                    "Resolution of the uploaded MRI image before resizing for classifier inference.",
+                ),
+                (
+                    "Prediction confidence",
+                    f'{result["pred_conf"] * 100:.2f}%',
+                    "Probability associated with the winning class reported in the result panel.",
+                ),
+                (
+                    "ADC probability",
+                    f'{result["prob_adc"]:.3f}',
+                    "Class probability assigned specifically to adenocarcinoma.",
+                ),
+                (
+                    "SCC probability",
+                    f'{result["prob_scc"]:.3f}',
+                    "Class probability assigned specifically to squamous cell carcinoma.",
+                ),
+                (
+                    "Decision threshold",
+                    f'{result["threshold_used"]:.2f}',
+                    "Probability threshold used to convert the raw output into the final class label.",
+                ),
+                (
+                    "Decision source",
+                    result["decision_source"],
+                    "Model branch used to generate the reported final subtype.",
+                ),
+                (
+                    "Accuracy",
+                    GLOBAL_CLS_ACC,
+                    "Overall proportion of correctly classified cases in the reference evaluation.",
+                ),
+                (
+                    "Balanced Accuracy",
+                    GLOBAL_BAL_ACC,
+                    "Average sensitivity across both classes, reported to account for class imbalance.",
+                ),
+                (
+                    "AUC",
+                    GLOBAL_AUC,
+                    "ROC-based separability measure summarising discrimination performance across thresholds.",
+                ),
+            ],
         )
 
         render_metric_explainer()
 
         render_chart_panel(
             "Final classification performance",
-            "Global performance values for the final full-image classification strategy."
+            "Global performance values for the final full-image classification strategy.",
         )
-        st.plotly_chart(build_cls_metrics_chart(), use_container_width=True)
+
+        st.plotly_chart(
+            build_cls_metrics_chart(),
+            use_container_width=True,
+        )
 
     elif mode == "pipeline":
-        render_section_intro(
-            "Full pipeline output",
-            "Combined localisation and final subtype prediction from the integrated end-to-end workflow."
+        st.markdown(
+            '<div class="seg-analysis-title">COMPLETE PIPELINE ANALYSIS</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="seg-analysis-subtitle">Combined tumour localisation and final subtype prediction from the integrated end-to-end workflow.</div>',
+            unsafe_allow_html=True,
         )
 
         render_status_banner(
@@ -5087,18 +5291,95 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
             positive_title="🔴 Tumour region detected",
             positive_desc="The segmentation model detected a lesion. Segmentation is used for localisation, while the final subtype decision comes from full-image classification.",
             negative_title="🟢 No tumour detected",
-            negative_desc="No reliable tumour mask was detected. The final subtype decision still comes from the full-image classifier.",
+            negative_desc="No reliable tumour mask was detected. Subtype classification was not performed.",
         )
 
         c1, c2, c3 = st.columns([1.0, 1.0, 1.28], gap="medium")
+
         with c1:
-            render_visual_card("Original image", result["img_256"], "Preprocessed slice")
+            render_visual_card(
+                "Original image",
+                result["img_256"],
+                "Preprocessed slice",
+            )
+
         with c2:
-            render_visual_card("Predicted mask", result["bin_mask"] * 255, "Segmentation output")
+            render_visual_card(
+                "Predicted mask",
+                result["bin_mask"] * 255,
+                "Segmentation output",
+            )
+
         with c3:
-            render_visual_card("Overlay", result["overlay_img"], "Mask highlighted on the input image", large=True)
+            render_visual_card(
+                "Overlay",
+                result["overlay_img"],
+                "Mask highlighted on the input image",
+                large=True,
+            )
+
+        if not result.get("classification_performed", True):
+            render_metrics_table(
+                "Pipeline summary metrics",
+                "The pipeline stopped after the segmentation gate because no reliable tumour region was detected.",
+                [
+                    (
+                        "Tumour status",
+                        "Not detected",
+                        "Segmentation-stage status after thresholding and postprocessing.",
+                    ),
+                    (
+                        "Input resolution",
+                        result.get("input_resolution", "—"),
+                        "Resolution of the uploaded MRI image before internal preprocessing.",
+                    ),
+                    (
+                        "Predicted subtype",
+                        NEGATIVE_LABEL,
+                        "No histological subtype was assigned because classification was not performed.",
+                    ),
+                    (
+                        "Classification result",
+                        "Not performed",
+                        "The ADC/SCC classifier was skipped because no reliable tumour was detected.",
+                    ),
+                    (
+                        "Tumour area",
+                        f'{result["total_pixels"]} px',
+                        "Segmented active area retained in the final mask.",
+                    ),
+                    (
+                        "Minimum required area",
+                        f"{MIN_ACTIVE_PIXELS} px",
+                        "Minimum number of active pixels required to continue to classification.",
+                    ),
+                    (
+                        "Mask confidence",
+                        f'{result["mean_mask_conf"]:.3f}',
+                        "Average mask probability inside the segmented tumour region.",
+                    ),
+                    (
+                        "Detected components",
+                        str(component_count(result.get("components"))),
+                        "Connected components found above the minimum area threshold before optional LCC selection.",
+                    ),
+                    (
+                        "Decision source",
+                        result["decision_source"],
+                        "Inference rule used to stop or continue the workflow.",
+                    ),
+                    (
+                        "Segmentation logic",
+                        result["seg_postproc_note"],
+                        "Thresholding and postprocessing configuration used for the localisation stage.",
+                    ),
+                ],
+            )
+
+            return
 
         lower_left, lower_right = st.columns([0.95, 1.05], gap="medium")
+
         with lower_left:
             render_classification_hero(
                 result,
@@ -5108,16 +5389,18 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
                 ),
                 compact=True,
             )
+
         with lower_right:
             render_prob_panel(
                 "Final subtype probabilities",
-                "Final decision is obtained from the full-image classification branch."
+                "Final decision is obtained from the full-image classification branch.",
             )
+
             st.plotly_chart(
                 build_probability_bar(
                     result["prob_adc_final"],
                     result["prob_scc_final"],
-                    "Final subtype probabilities"
+                    "Final subtype probabilities",
                 ),
                 use_container_width=True,
             )
@@ -5126,30 +5409,93 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
             "Pipeline summary metrics",
             "Combined case-level information, decision logic, and reference model performance values.",
             [
-                ("Tumour status", "Detected" if result["tumour_detected"] else "Not detected", "Segmentation-stage status after thresholding and postprocessing."),
-                ("Input resolution", result.get("input_resolution", "—"), "Resolution of the uploaded MRI image before internal preprocessing."),
-                ("Predicted subtype", result["pred_label"], "Final subtype assigned by the integrated workflow."),
-                ("Final confidence", f'{result["pred_conf"]*100:.2f}%', "Winning-class probability used for the final report."),
-                ("Final ADC probability", f'{result["prob_adc_final"]:.3f}', "Probability assigned specifically to the ADC class."),
-                ("Final SCC probability", f'{result["prob_scc_final"]:.3f}', "Probability assigned specifically to the SCC class."),
-                ("Tumour area", f'{result["total_pixels"]} px', "Segmented active area retained in the final mask."),
-                ("Mask confidence", f'{result["mean_mask_conf"]:.3f}', "Average mask probability inside the segmented tumour region."),
-                ("Detected components", str(component_count(result.get("components"))), "Connected components found above the minimum area threshold before optional LCC selection."),
-                ("Decision source", result["decision_source"], "Inference branch used to generate the final subtype output."),
-                ("Segmentation logic", result["seg_postproc_note"], "Thresholding and postprocessing configuration used for the localisation stage."),
-                ("Segmentation Dice", GLOBAL_SEG_DICE, "Reference global segmentation metric for the selected final model."),
-                ("Accuracy", GLOBAL_CLS_ACC, "Reference global classification accuracy of the final integrated setting."),
-                ("Balanced Accuracy", GLOBAL_BAL_ACC, "Reference class-balanced metric of the final classification configuration."),
-                ("AUC", GLOBAL_AUC, "Reference ROC-based discriminative performance of the final classification configuration."),
-            ]
+                (
+                    "Tumour status",
+                    "Detected" if result["tumour_detected"] else "Not detected",
+                    "Segmentation-stage status after thresholding and postprocessing.",
+                ),
+                (
+                    "Input resolution",
+                    result.get("input_resolution", "—"),
+                    "Resolution of the uploaded MRI image before internal preprocessing.",
+                ),
+                (
+                    "Predicted subtype",
+                    result["pred_label"],
+                    "Final subtype assigned by the integrated workflow.",
+                ),
+                (
+                    "Final confidence",
+                    f'{result["pred_conf"] * 100:.2f}%',
+                    "Winning-class probability used for the final report.",
+                ),
+                (
+                    "Final ADC probability",
+                    f'{result["prob_adc_final"]:.3f}',
+                    "Probability assigned specifically to the ADC class.",
+                ),
+                (
+                    "Final SCC probability",
+                    f'{result["prob_scc_final"]:.3f}',
+                    "Probability assigned specifically to the SCC class.",
+                ),
+                (
+                    "Tumour area",
+                    f'{result["total_pixels"]} px',
+                    "Segmented active area retained in the final mask.",
+                ),
+                (
+                    "Mask confidence",
+                    f'{result["mean_mask_conf"]:.3f}',
+                    "Average mask probability inside the segmented tumour region.",
+                ),
+                (
+                    "Detected components",
+                    str(component_count(result.get("components"))),
+                    "Connected components found above the minimum area threshold before optional LCC selection.",
+                ),
+                (
+                    "Decision source",
+                    result["decision_source"],
+                    "Inference branch used to generate the final subtype output.",
+                ),
+                (
+                    "Segmentation logic",
+                    result["seg_postproc_note"],
+                    "Thresholding and postprocessing configuration used for the localisation stage.",
+                ),
+                (
+                    "Segmentation Dice",
+                    GLOBAL_SEG_DICE,
+                    "Reference global segmentation metric for the selected final model.",
+                ),
+                (
+                    "Accuracy",
+                    GLOBAL_CLS_ACC,
+                    "Reference global classification accuracy of the final integrated setting.",
+                ),
+                (
+                    "Balanced Accuracy",
+                    GLOBAL_BAL_ACC,
+                    "Reference class-balanced metric of the final classification configuration.",
+                ),
+                (
+                    "AUC",
+                    GLOBAL_AUC,
+                    "Reference ROC-based discriminative performance of the final classification configuration.",
+                ),
+            ],
         )
 
         render_chart_panel(
             "Model performance overview",
-            "Global metrics of the final end-to-end configuration."
+            "Global metrics of the final end-to-end configuration.",
         )
-        st.plotly_chart(build_global_metrics_chart(), use_container_width=True)
 
+        st.plotly_chart(
+            build_global_metrics_chart(),
+            use_container_width=True,
+        )
 # =========================================================
 # ROUTER
 # =========================================================
