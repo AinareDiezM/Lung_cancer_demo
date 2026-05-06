@@ -4243,6 +4243,269 @@ def render_segmentation_analysis_design(result: dict):
 
     render_segmentation_model_information()
 
+    render_report_download("segmentation", result)
+
+
+# =========================================================
+# REPORT GENERATION
+# =========================================================
+def _escape_html(value) -> str:
+    import html as _html
+    return _html.escape(str(value))
+
+
+def _image_to_data_uri(img) -> str:
+    """Convert a NumPy/PIL image into an embedded PNG for the HTML report."""
+    import io
+
+    if img is None:
+        return ""
+
+    arr = np.asarray(img)
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+    if arr.ndim == 2:
+        pil_img = Image.fromarray(arr, mode="L")
+    else:
+        pil_img = Image.fromarray(arr)
+
+    buffer = io.BytesIO()
+    pil_img.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _report_rows_html(rows) -> str:
+    return "".join(
+        "<tr>"
+        f"<td>{_escape_html(label)}</td>"
+        f"<td>{_escape_html(value)}</td>"
+        "</tr>"
+        for label, value in rows
+    )
+
+
+def _report_image_card(title: str, img) -> str:
+    src = _image_to_data_uri(img)
+    if not src:
+        return ""
+    return f"""
+        <div class="image-card">
+            <div class="image-title">{_escape_html(title)}</div>
+            <img src="{src}" alt="{_escape_html(title)}">
+        </div>
+    """
+
+
+def build_analysis_report_html(mode: str, result: dict) -> bytes:
+    """Create a lightweight, self-contained HTML report for the selected analysis mode."""
+    generated_at = now_iso().replace("T", " ")
+    session_id = st.session_state.get("session_id") or "Visitor session"
+    access_type = st.session_state.get("access_type") or "Visitor"
+
+    report_title = {
+        "segmentation": "Segmentation Report",
+        "classification": "Classification Report",
+        "pipeline": "Complete Pipeline Report",
+    }.get(mode, "Analysis Report")
+
+    images_html = ""
+    rows = []
+    subtitle = ""
+    badge_text = "Academic demo"
+
+    if mode == "segmentation":
+        metrics = segmentation_shape_metrics(result)
+        subtitle = "Automatic lung tumour localisation using the final segmentation model."
+        images_html = (
+            _report_image_card("Original image", result.get("img_256"))
+            + _report_image_card("Predicted mask", result.get("bin_mask") * 255 if result.get("bin_mask") is not None else None)
+            + _report_image_card("Overlay", result.get("overlay_img"))
+        )
+        rows = [
+            ("Tumour status", "Detected" if result.get("tumour_detected") else "Not detected"),
+            ("Tumour area", f"{metrics['area']:,} px"),
+            ("Tumour area ratio", f"{metrics['area_ratio']:.1f} %"),
+            ("Perimeter", f"{metrics['perimeter']:.0f} px"),
+            ("Compactness", f"{metrics['compactness']:.3f}"),
+            ("Centroid (row, col)", metrics["centroid"]),
+            ("Mean intensity", f"{metrics['mean_intensity']:.1f}"),
+            ("Segmentation threshold", f"{SEG_THRESHOLD:.2f}"),
+            ("Inference mode", SEG_INFERENCE_MODE),
+            ("TTA used", "Yes" if SEG_USE_TTA else "No"),
+            ("Reference Dice", GLOBAL_SEG_DICE),
+            ("Reference IoU", GLOBAL_SEG_IOU),
+        ]
+
+    elif mode == "classification":
+        subtitle = "Histological subtype prediction from the final classification workflow."
+        if result.get("classification_performed", True):
+            images_html = _report_image_card("Classifier input", result.get("roi"))
+            rows = [
+                ("Classification status", "Performed"),
+                ("Predicted subtype", result.get("pred_label", "—")),
+                ("Prediction confidence", f"{result.get('pred_conf', 0) * 100:.2f}%"),
+                ("ADC probability", f"{result.get('prob_adc', 0):.3f}"),
+                ("SCC probability", f"{result.get('prob_scc', 0):.3f}"),
+                ("Decision threshold", f"{result.get('threshold_used', FINAL_CLS_THRESHOLD):.2f}"),
+                ("Decision source", result.get("decision_source", "—")),
+                ("Reference accuracy", GLOBAL_CLS_ACC),
+                ("Reference balanced accuracy", GLOBAL_BAL_ACC),
+                ("Reference AUC", GLOBAL_AUC),
+            ]
+        else:
+            images_html = (
+                _report_image_card("Input image", result.get("img_256"))
+                + _report_image_card("Segmentation gate mask", result.get("bin_mask") * 255 if result.get("bin_mask") is not None else None)
+                + _report_image_card("Overlay", result.get("overlay_img"))
+            )
+            rows = [
+                ("Classification status", "Not performed"),
+                ("Reason", "No reliable tumour region detected by the segmentation gate"),
+                ("Tumour area", f"{result.get('total_pixels', 0)} px"),
+                ("Minimum required area", f"{MIN_ACTIVE_PIXELS} px"),
+                ("Decision source", result.get("decision_source", "—")),
+                ("Segmentation logic", result.get("seg_postproc_note", "—")),
+            ]
+
+    elif mode == "pipeline":
+        subtitle = "Integrated tumour localisation and final subtype prediction from the complete workflow."
+        images_html = (
+            _report_image_card("Original image", result.get("img_256"))
+            + _report_image_card("Predicted mask", result.get("bin_mask") * 255 if result.get("bin_mask") is not None else None)
+            + _report_image_card("Overlay", result.get("overlay_img"))
+        )
+        if result.get("classification_performed", True):
+            rows = [
+                ("Tumour status", "Detected" if result.get("tumour_detected") else "Not detected"),
+                ("Classification status", "Performed"),
+                ("Predicted subtype", result.get("pred_label", "—")),
+                ("Final confidence", f"{result.get('pred_conf', 0) * 100:.2f}%"),
+                ("Final ADC probability", f"{result.get('prob_adc_final', result.get('prob_adc', 0)):.3f}"),
+                ("Final SCC probability", f"{result.get('prob_scc_final', result.get('prob_scc', 0)):.3f}"),
+                ("Tumour area", f"{result.get('total_pixels', 0)} px"),
+                ("Mask confidence", f"{result.get('mean_mask_conf', 0):.3f}"),
+                ("Detected components", str(component_count(result.get("components")))),
+                ("Decision source", result.get("decision_source", "—")),
+                ("Segmentation Dice", GLOBAL_SEG_DICE),
+                ("Classification accuracy", GLOBAL_CLS_ACC),
+                ("Balanced accuracy", GLOBAL_BAL_ACC),
+                ("AUC", GLOBAL_AUC),
+            ]
+        else:
+            rows = [
+                ("Tumour status", "Not detected"),
+                ("Classification status", "Not performed"),
+                ("Predicted subtype", NEGATIVE_LABEL),
+                ("Reason", "The pipeline stopped after the segmentation gate"),
+                ("Tumour area", f"{result.get('total_pixels', 0)} px"),
+                ("Minimum required area", f"{MIN_ACTIVE_PIXELS} px"),
+                ("Mask confidence", f"{result.get('mean_mask_conf', 0):.3f}"),
+                ("Decision source", result.get("decision_source", "—")),
+                ("Segmentation logic", result.get("seg_postproc_note", "—")),
+            ]
+
+    rows_html = _report_rows_html(rows)
+
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{_escape_html(report_title)}</title>
+<style>
+    @page {{ size: A4; margin: 16mm; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #f5f7fb; color: #1f2937; font-family: Arial, Helvetica, sans-serif; line-height: 1.45; }}
+    .report {{ max-width: 980px; margin: 0 auto; background: #ffffff; border-radius: 24px; overflow: hidden; box-shadow: 0 18px 55px rgba(15, 42, 67, 0.13); }}
+    .header {{ padding: 34px 42px; color: white; background: linear-gradient(135deg, #102a43 0%, #1d4e89 64%, #2e86c1 100%); }}
+    .header h1 {{ margin: 0 0 8px 0; font-size: 34px; letter-spacing: -0.03em; }}
+    .header p {{ margin: 0; color: #d8e8f7; font-size: 15px; }}
+    .meta {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 22px 42px; background: #eef5fc; border-bottom: 1px solid #dbe7f3; }}
+    .meta-card {{ background: white; border: 1px solid #dbe7f3; border-radius: 14px; padding: 12px 14px; }}
+    .meta-label {{ color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }}
+    .meta-value {{ color: #102a43; font-weight: 700; font-size: 13px; margin-top: 4px; }}
+    .content {{ padding: 30px 42px 38px 42px; }}
+    .section {{ margin-bottom: 28px; }}
+    .section h2 {{ color: #102a43; margin: 0 0 8px 0; font-size: 22px; }}
+    .section-subtitle {{ color: #64748b; margin: 0 0 18px 0; font-size: 14px; }}
+    .image-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
+    .image-card {{ border: 1px solid #dbe7f3; border-radius: 16px; background: #f8fafc; padding: 12px; text-align: center; }}
+    .image-title {{ font-size: 13px; color: #475569; font-weight: 700; margin-bottom: 10px; }}
+    .image-card img {{ max-width: 100%; border-radius: 12px; background: #0f172a; }}
+    table {{ width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 16px; }}
+    th {{ text-align: left; background: #102a43; color: white; padding: 12px 14px; font-size: 13px; }}
+    td {{ border-bottom: 1px solid #e5edf5; padding: 11px 14px; font-size: 13px; }}
+    td:first-child {{ color: #475569; width: 42%; }}
+    td:last-child {{ color: #0f172a; font-weight: 700; }}
+    .disclaimer {{ background: #fff7ed; color: #9a3412; border: 1px solid #fed7aa; border-radius: 16px; padding: 16px 18px; font-size: 13px; }}
+    .footer {{ color: #64748b; font-size: 11px; margin-top: 22px; }}
+    @media print {{ body {{ background: white; }} .report {{ box-shadow: none; border-radius: 0; }} }}
+</style>
+</head>
+<body>
+<div class="report">
+    <div class="header">
+        <h1>{_escape_html(report_title)}</h1>
+        <p>{_escape_html(subtitle)}</p>
+        <p style="margin-top:10px; font-weight:700; color:#ffffff;">{_escape_html(AUTHOR_NAME)} · {_escape_html(AFFILIATION)}</p>
+    </div>
+    <div class="meta">
+        <div class="meta-card"><div class="meta-label">Generated</div><div class="meta-value">{_escape_html(generated_at)}</div></div>
+        <div class="meta-card"><div class="meta-label">Access</div><div class="meta-value">{_escape_html(access_type)}</div></div>
+        <div class="meta-card"><div class="meta-label">Session</div><div class="meta-value">{_escape_html(session_id)}</div></div>
+        <div class="meta-card"><div class="meta-label">Use</div><div class="meta-value">{_escape_html(badge_text)}</div></div>
+    </div>
+    <div class="content">
+        <div class="section">
+            <h2>Visual results</h2>
+            <p class="section-subtitle">Images generated from the current uploaded case.</p>
+            <div class="image-grid">{images_html}</div>
+        </div>
+        <div class="section">
+            <h2>Result summary</h2>
+            <p class="section-subtitle">Case-level outputs and reference model information.</p>
+            <table>
+                <thead><tr><th>Item</th><th>Value</th></tr></thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+        </div>
+        <div class="section disclaimer">
+            <strong>Academic disclaimer.</strong> This report was generated by a prototype developed as part of a Final Degree Project in Biomedical Engineering. It is intended for academic demonstration only and must not be used for clinical diagnosis or medical decision-making.
+        </div>
+        <div class="footer">{_escape_html(APP_TITLE)} · Automatically generated report · Page 1/1</div>
+    </div>
+</div>
+</body>
+</html>'''
+    return html.encode("utf-8")
+
+
+def render_report_download(mode: str, result: dict):
+    """Render a small report card and a mode-specific download button."""
+    labels = {
+        "segmentation": ("Download segmentation report", "segmentation_report.html"),
+        "classification": ("Download classification report", "classification_report.html"),
+        "pipeline": ("Download complete report", "complete_pipeline_report.html"),
+    }
+    label, filename = labels.get(mode, ("Download report", "analysis_report.html"))
+
+    st.markdown(
+        '''<div style="margin-top:1.4rem; padding:1.1rem 1.25rem; border:1px solid #dbe7f3; border-radius:18px; background:#ffffff; box-shadow:0 8px 22px rgba(18,42,76,0.035);">
+            <div style="font-weight:800; color:#102a43; font-size:1.02rem;">Download report</div>
+            <div style="color:#64748b; font-size:0.88rem; margin-top:0.25rem;">A simple HTML report will be generated using the current results shown on this page. You can open it in any browser or save it as PDF using Print - Save as PDF.</div>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+
+    st.download_button(
+        label=label,
+        data=build_analysis_report_html(mode, result),
+        file_name=filename,
+        mime="text/html",
+        key=f"download_{mode}_report",
+    )
+
 
 
 def render_metric_explainer():
@@ -5248,6 +5511,8 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
                 ],
             )
 
+            render_report_download("classification", result)
+
             return
 
         top_left, top_right = st.columns([1.04, 1.0], gap="medium")
@@ -5352,6 +5617,8 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
             use_container_width=True,
         )
 
+        render_report_download("classification", result)
+
     elif mode == "pipeline":
         st.markdown(
             '<div class="seg-analysis-title">COMPLETE PIPELINE ANALYSIS</div>',
@@ -5451,6 +5718,8 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
                     ),
                 ],
             )
+
+            render_report_download("pipeline", result)
 
             return
 
@@ -5572,6 +5841,8 @@ def _render_results(mode: str, result: dict, img_orig: np.ndarray):
             build_global_metrics_chart(),
             use_container_width=True,
         )
+
+        render_report_download("pipeline", result)
 # =========================================================
 # ROUTER
 # =========================================================
