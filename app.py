@@ -44,9 +44,20 @@ if not hasattr(st, "_tfg_original_image"):
     st._tfg_original_image = st.image
 
 def _image_compat(*args, **kwargs):
-    if "use_container_width" in kwargs:
-        kwargs["use_column_width"] = kwargs.pop("use_container_width")
-    return st._tfg_original_image(*args, **kwargs)
+    # Prefer the current Streamlit API to avoid deprecation warnings.
+    # Fall back to the older parameter only when the installed version needs it.
+    use_container = kwargs.pop("use_container_width", None)
+    if use_container is not None and "width" not in kwargs and "use_column_width" not in kwargs:
+        kwargs["width"] = "stretch" if use_container else "content"
+    try:
+        return st._tfg_original_image(*args, **kwargs)
+    except TypeError as e:
+        if "unexpected keyword argument 'width'" in str(e):
+            width_value = kwargs.pop("width", None)
+            if width_value == "stretch":
+                kwargs["use_column_width"] = True
+            return st._tfg_original_image(*args, **kwargs)
+        raise
 
 st.image = _image_compat
 
@@ -217,6 +228,34 @@ header[data-testid="stHeader"] {
     height: 0;
 }
 
+/* Keep Streamlit's image fullscreen control clickable.
+   Only the Deploy button is hidden; the toolbar itself is not disabled because
+   Streamlit also uses it for the image fullscreen/minimise control. */
+div[data-testid="stDeployButton"],
+.stDeployButton {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+div[data-testid="stToolbar"],
+header[data-testid="stHeader"] div[data-testid="stToolbar"],
+header[data-testid="stHeader"] [data-testid="stToolbar"] {
+    pointer-events: auto !important;
+    z-index: 999999 !important;
+}
+
+/* Keep the image fullscreen/close control on the left side. */
+button[title*="fullscreen"],
+button[aria-label*="fullscreen"],
+button[title*="Fullscreen"],
+button[aria-label*="Fullscreen"],
+button[title*="Exit"],
+button[aria-label*="Exit"],
+button[title*="Close"],
+button[aria-label*="Close"] {
+    right: auto !important;
+}
+
 .block-container {
     padding-top: 0.10rem !important;
     padding-bottom: clamp(1.6rem, 2.2vw, 2.4rem);
@@ -228,6 +267,77 @@ header[data-testid="stHeader"] {
 
 div[data-testid="stImage"] img {
     border-radius: 18px;
+}
+
+/* Global report download button style. Kept here so it remains blue even after reruns. */
+div.stDownloadButton > button {
+    width: 100%;
+    border-radius: 14px;
+    border: 1px solid rgba(16, 42, 67, 0.22);
+    background: linear-gradient(135deg, #102a43 0%, #1d4e89 100%) !important;
+    color: #ffffff !important;
+    font-weight: 800;
+    font-size: 0.96rem;
+    padding: 0.78rem 1.1rem;
+    box-shadow: 0 12px 26px rgba(16, 42, 67, 0.22);
+    transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+div.stDownloadButton > button:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.03);
+    box-shadow: 0 16px 34px rgba(16, 42, 67, 0.30);
+    border-color: rgba(29, 78, 137, 0.42);
+    color: #ffffff !important;
+}
+div.stDownloadButton > button:active {
+    transform: translateY(0);
+    box-shadow: 0 8px 20px rgba(16, 42, 67, 0.20);
+}
+div.stDownloadButton > button:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(29, 78, 137, 0.18), 0 12px 26px rgba(16, 42, 67, 0.22);
+}
+
+
+/* Move Streamlit image enlarge/minimise controls away from the right toolbar.
+   The fullscreen viewer is rendered outside stImage in some Streamlit versions,
+   so the selectors below target both the normal image card and the fullscreen modal. */
+div[data-testid="stImage"] button[title*="fullscreen"],
+div[data-testid="stImage"] button[aria-label*="fullscreen"],
+div[data-testid="stImage"] button[title*="Fullscreen"],
+div[data-testid="stImage"] button[aria-label*="Fullscreen"],
+div[data-testid="stImage"] button[title*="full screen"],
+div[data-testid="stImage"] button[aria-label*="full screen"],
+div[data-testid="stImage"] button[title*="Full screen"],
+div[data-testid="stImage"] button[aria-label*="Full screen"],
+div[data-testid="stImage"] button[title*="Close"],
+div[data-testid="stImage"] button[aria-label*="Close"] {
+    left: 0.75rem !important;
+    right: auto !important;
+}
+
+/* Fullscreen image modal / enlarged-image controls */
+/* Disable Streamlit native image enlargement/fullscreen controls.
+   This removes the hover/click fullscreen behaviour from st.image outputs
+   so the visual result cards remain stable and do not overlap the Streamlit toolbar. */
+div[data-testid="stImage"] button,
+div[data-testid="stImage"] [role="button"],
+div[data-testid="stImage"] [data-testid="StyledFullScreenButton"],
+div[data-testid="stImage"] [aria-label*="fullscreen" i],
+div[data-testid="stImage"] [title*="fullscreen" i] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+}
+
+div[data-testid="stImage"] img {
+    pointer-events: none !important;
+    cursor: default !important;
+}
+
+div[data-testid="stImage"] {
+    cursor: default !important;
 }
 
 section[data-testid="stFileUploaderDropzone"] {
@@ -2654,6 +2764,28 @@ div[data-testid="stVerticalBlock"]:has(.login-only-single-card-anchor) .login-st
     background-repeat: no-repeat !important;
 }
 
+
+/* Authoritative blue styling for report download buttons. */
+div.stDownloadButton > button {
+    width: 100% !important;
+    border-radius: 14px !important;
+    border: 1px solid rgba(15, 42, 67, 0.28) !important;
+    background: linear-gradient(135deg, #143B5D 0%, #1D4E89 100%) !important;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    font-size: 0.95rem !important;
+    padding: 0.78rem 1.15rem !important;
+    box-shadow: 0 12px 26px rgba(15, 42, 67, 0.20) !important;
+    transition: all 0.18s ease !important;
+}
+div.stDownloadButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 16px 32px rgba(15, 42, 67, 0.26) !important;
+    border-color: rgba(29, 78, 137, 0.48) !important;
+}
+div.stDownloadButton > button:active {
+    transform: translateY(0) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3058,7 +3190,9 @@ def end_session():
 # HELPERS
 # =========================================================
 def show_image(img, caption=""):
-    st.image(img, caption=caption, use_container_width=True)
+    # width="stretch" is the current Streamlit parameter. The compatibility
+    # wrapper above keeps older local environments working.
+    st.image(img, caption=caption, width="stretch")
 
 
 
@@ -4255,20 +4389,57 @@ def _escape_html(value) -> str:
 
 
 def _image_to_data_uri(img) -> str:
-    """Convert a NumPy/PIL image into an embedded PNG for the HTML report."""
+    """Convert a NumPy/PIL image into an embedded PNG for the HTML report.
+
+    The report is opened in different browsers/PDF viewers, and some of them
+    render transparent PNG areas as black. To avoid this, every exported image
+    is flattened to RGB on a white background before being embedded.
+    """
     import io
 
     if img is None:
         return ""
 
     arr = np.asarray(img)
+
+    # Streamlit visual arrays in this app may be stored either as 0-255 images
+    # or as normalised 0-1 floats. Exporting 0-1 floats directly makes the
+    # image almost black in the downloaded HTML report, so normalise safely.
     if arr.dtype != np.uint8:
+        arr = arr.astype(np.float32)
+        finite = np.isfinite(arr)
+        if finite.any():
+            arr_min = float(np.nanmin(arr[finite]))
+            arr_max = float(np.nanmax(arr[finite]))
+        else:
+            arr_min, arr_max = 0.0, 0.0
+
+        if arr_max <= 1.5 and arr_min >= 0.0:
+            arr = arr * 255.0
+        elif arr_max > arr_min and (arr_min < 0.0 or arr_max > 255.0):
+            arr = (arr - arr_min) / (arr_max - arr_min) * 255.0
+
+        arr = np.nan_to_num(arr, nan=0.0, posinf=255.0, neginf=0.0)
         arr = np.clip(arr, 0, 255).astype(np.uint8)
 
     if arr.ndim == 2:
-        pil_img = Image.fromarray(arr, mode="L")
+        pil_img = Image.fromarray(arr, mode="L").convert("RGB")
     else:
-        pil_img = Image.fromarray(arr)
+        if arr.ndim == 3 and arr.shape[-1] == 1:
+            arr = arr[..., 0]
+            pil_img = Image.fromarray(arr, mode="L").convert("RGB")
+        elif arr.ndim == 3 and arr.shape[-1] >= 4:
+            pil_img = Image.fromarray(arr[..., :4])
+        else:
+            pil_img = Image.fromarray(arr[..., :3])
+
+        if pil_img.mode in ("RGBA", "LA") or (pil_img.mode == "P" and "transparency" in pil_img.info):
+            white_bg = Image.new("RGB", pil_img.size, (255, 255, 255))
+            rgba = pil_img.convert("RGBA")
+            white_bg.paste(rgba, mask=rgba.getchannel("A"))
+            pil_img = white_bg
+        else:
+            pil_img = pil_img.convert("RGB")
 
     buffer = io.BytesIO()
     pil_img.save(buffer, format="PNG")
@@ -4408,6 +4579,34 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
 
     rows_html = _report_rows_html(rows)
 
+    result_highlight_html = ""
+    if mode == "classification" and result.get("classification_performed", True):
+        result_highlight_html = f'''
+        <div class="result-highlight">
+            <div>
+                <div class="result-kicker">Predicted subtype</div>
+                <div class="result-value">{_escape_html(result.get("pred_label", "—"))}</div>
+            </div>
+            <div>
+                <div class="result-kicker">Confidence</div>
+                <div class="result-value small">{_escape_html(f"{result.get('pred_conf', 0) * 100:.2f}%")}</div>
+            </div>
+        </div>
+        '''
+    elif mode == "pipeline" and result.get("classification_performed", True):
+        result_highlight_html = f'''
+        <div class="result-highlight">
+            <div>
+                <div class="result-kicker">Final subtype</div>
+                <div class="result-value">{_escape_html(result.get("pred_label", "—"))}</div>
+            </div>
+            <div>
+                <div class="result-kicker">Final confidence</div>
+                <div class="result-value small">{_escape_html(f"{result.get('pred_conf', 0) * 100:.2f}%")}</div>
+            </div>
+        </div>
+        '''
+
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4429,6 +4628,10 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
     .section {{ margin-bottom: 28px; }}
     .section h2 {{ color: #102a43; margin: 0 0 8px 0; font-size: 22px; }}
     .section-subtitle {{ color: #64748b; margin: 0 0 18px 0; font-size: 14px; }}
+    .result-highlight {{ display: flex; justify-content: space-between; align-items: center; gap: 18px; margin: 0 0 28px 0; padding: 22px 26px; border-radius: 20px; background: linear-gradient(135deg, #f3e8ff 0%, #eef2ff 100%); border: 1px solid #ddd6fe; }}
+    .result-kicker {{ color: #6b21a8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }}
+    .result-value {{ color: #581c87; font-size: 34px; line-height: 1.05; font-weight: 800; }}
+    .result-value.small {{ font-size: 28px; text-align: right; }}
     .image-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
     .image-card {{ border: 1px solid #dbe7f3; border-radius: 16px; background: #f8fafc; padding: 12px; text-align: center; }}
     .image-title {{ font-size: 13px; color: #475569; font-weight: 700; margin-bottom: 10px; }}
@@ -4457,6 +4660,7 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
         <div class="meta-card"><div class="meta-label">Use</div><div class="meta-value">{_escape_html(badge_text)}</div></div>
     </div>
     <div class="content">
+        {result_highlight_html}
         <div class="section">
             <h2>Visual results</h2>
             <p class="section-subtitle">Images generated from the current uploaded case.</p>
@@ -4482,19 +4686,97 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
 
 
 def render_report_download(mode: str, result: dict):
-    """Render a small report card and a mode-specific download button."""
+    """Render a polished report export card and a mode-specific download button."""
     labels = {
         "segmentation": ("Download segmentation report", "segmentation_report.html"),
         "classification": ("Download classification report", "classification_report.html"),
-        "pipeline": ("Download complete report", "complete_pipeline_report.html"),
+        "pipeline": ("Download complete pipeline report", "complete_pipeline_report.html"),
+    }
+    descriptions = {
+        "segmentation": "Export the uploaded image, predicted mask, overlay and tumour segmentation metrics.",
+        "classification": "Export the classifier input, predicted subtype, confidence and probability values.",
+        "pipeline": "Export the complete analysis: tumour localisation, subtype prediction and final summary.",
     }
     label, filename = labels.get(mode, ("Download report", "analysis_report.html"))
+    description = descriptions.get(mode, "Export the current analysis results as a simple academic report.")
 
     st.markdown(
-        '''<div style="margin-top:1.4rem; padding:1.1rem 1.25rem; border:1px solid #dbe7f3; border-radius:18px; background:#ffffff; box-shadow:0 8px 22px rgba(18,42,76,0.035);">
-            <div style="font-weight:800; color:#102a43; font-size:1.02rem;">Download report</div>
-            <div style="color:#64748b; font-size:0.88rem; margin-top:0.25rem;">A simple HTML report will be generated using the current results shown on this page. You can open it in any browser or save it as PDF using Print - Save as PDF.</div>
-        </div>''',
+        f"""
+        <style>
+            .report-export-card {{
+                margin-top: 1.45rem;
+                margin-bottom: 0.72rem;
+                padding: 1.05rem 1.15rem;
+                border: 1px solid #dbe7f3;
+                border-radius: 18px;
+                background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+                box-shadow: 0 10px 26px rgba(18, 42, 76, 0.055);
+                display: flex;
+                align-items: center;
+                gap: 0.95rem;
+            }}
+            .report-export-icon {{
+                width: 44px;
+                height: 44px;
+                border-radius: 14px;
+                background: linear-gradient(135deg, #eaf4ff 0%, #dbeafe 100%);
+                color: #1d4ed8;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.25rem;
+                font-weight: 900;
+                flex: 0 0 auto;
+            }}
+            .report-export-title {{
+                color: #102a43;
+                font-size: 1.02rem;
+                font-weight: 850;
+                letter-spacing: -0.01em;
+                margin-bottom: 0.18rem;
+            }}
+            .report-export-text {{
+                color: #64748b;
+                font-size: 0.88rem;
+                line-height: 1.42;
+                margin: 0;
+            }}
+            div.stDownloadButton > button {{
+                width: 100%;
+                border-radius: 14px;
+                border: 1px solid rgba(16, 42, 67, 0.22);
+                background: linear-gradient(135deg, #102a43 0%, #1d4e89 100%);
+                color: #ffffff;
+                font-weight: 800;
+                font-size: 0.96rem;
+                padding: 0.78rem 1.1rem;
+                box-shadow: 0 12px 26px rgba(16, 42, 67, 0.22);
+                transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+            }}
+            div.stDownloadButton > button:hover {{
+                transform: translateY(-1px);
+                filter: brightness(1.02);
+                box-shadow: 0 16px 34px rgba(16, 42, 67, 0.30);
+                border-color: rgba(29, 78, 137, 0.42);
+                color: #ffffff;
+            }}
+            div.stDownloadButton > button:active {{
+                transform: translateY(0);
+                box-shadow: 0 8px 20px rgba(16, 42, 67, 0.20);
+            }}
+            div.stDownloadButton > button:focus {{
+                outline: none;
+                box-shadow: 0 0 0 3px rgba(29, 78, 137, 0.18), 0 12px 26px rgba(16, 42, 67, 0.22);
+            }}
+        </style>
+        <div class="report-export-card">
+            <div class="report-export-icon">↓</div>
+            <div>
+                <div class="report-export-title">Report ready</div>
+                <p class="report-export-text">{_escape_html(description)}</p>
+            </div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
 
