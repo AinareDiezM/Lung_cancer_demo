@@ -92,7 +92,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-SEG_MODEL_PATH = os.path.join(MODELS_DIR, "segmentationmodel.keras")
+SEG_MODEL_PATH = os.path.join(MODELS_DIR, "best_model_modelo30_dataset2.h5")
 FULL_CLS_MODEL_PATH = os.path.join(MODELS_DIR, "classificationmodel.keras")
 
 SEG_ICON_PATH = os.path.join(ASSETS_DIR, "segmentation_icon_crop.png")
@@ -136,9 +136,13 @@ AFFILIATION = "Biomedical Engineering · University of Deusto"
 SEG_INPUT_SIZE = (256, 256)
 CLS_INPUT_SIZE = (224, 224)
 
-SEG_THRESHOLD = 0.65
-MIN_COMPONENT_AREA = 50
-USE_LARGEST_CC = True
+# Final segmentation configuration aligned with the latest Modelo30 dataset-2 test run.
+# Test run: threshold=0.50, RAW inference, TTA=True.
+SEG_THRESHOLD = 0.50
+SEG_INFERENCE_MODE = "RAW"  # "RAW" matches the final test; "SOFT_PP" enables connected-component filtering.
+SEG_USE_TTA = True
+MIN_COMPONENT_AREA = 10
+USE_LARGEST_CC = False
 MIN_ACTIVE_PIXELS = 10
 
 FINAL_CLS_THRESHOLD = 0.50
@@ -146,7 +150,18 @@ FINAL_CLS_THRESHOLD = 0.50
 NEGATIVE_LABEL = "No tumour detected"
 POSITIVE_LABELS = {0: "Adenocarcinoma (ADC)", 1: "Squamous Cell Carcinoma (SCC)"}
 
-GLOBAL_SEG_DICE = "0.714"
+# Global test metrics for the updated segmentation model.
+GLOBAL_SEG_DICE = "0.772"
+GLOBAL_SEG_DICE_TUMOUR = "0.778"
+GLOBAL_SEG_DICE_ADC = "0.865"
+GLOBAL_SEG_DICE_SCC = "0.734"
+GLOBAL_SEG_IOU = "0.716"
+GLOBAL_SEG_PRECISION = "0.824"
+GLOBAL_SEG_RECALL = "0.846"
+GLOBAL_SEG_FP_SLICES = "3"
+GLOBAL_SEG_FN_SLICES = "1"
+GLOBAL_SEG_EVAL_SET = "Test set, 54 slices"
+
 GLOBAL_CLS_ACC = "0.778"
 GLOBAL_BAL_ACC = "0.806"
 GLOBAL_AUC = "0.765"
@@ -3089,6 +3104,25 @@ def preprocess_for_segmentation(img_gray: np.ndarray) -> Tuple[np.ndarray, np.nd
     x_seg = np.stack([img_norm] * 3, axis=-1)
     return img_norm, np.expand_dims(x_seg, axis=0).astype(np.float32)
 
+def extract_mask_components(bin_mask: np.ndarray):
+    """Return connected-component descriptors without modifying the binary mask."""
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(bin_mask.astype(np.uint8), connectivity=8)
+    if num_labels <= 1:
+        return None
+
+    components = []
+    for i in range(1, num_labels):
+        components.append({
+            "area": int(stats[i, cv2.CC_STAT_AREA]),
+            "bbox": (
+                int(stats[i, cv2.CC_STAT_LEFT]),
+                int(stats[i, cv2.CC_STAT_TOP]),
+                int(stats[i, cv2.CC_STAT_WIDTH]),
+                int(stats[i, cv2.CC_STAT_HEIGHT]),
+            ),
+        })
+    return components or None
+
 def postprocess_mask(prob_mask, threshold, min_area, use_lcc):
     bin_mask = (prob_mask >= threshold).astype(np.uint8)
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(bin_mask, connectivity=8)
@@ -3125,6 +3159,24 @@ def postprocess_mask(prob_mask, threshold, min_area, use_lcc):
 
     return filtered, components
 
+def predict_segmentation_probability(seg_model, x_seg: np.ndarray) -> np.ndarray:
+    """Predict segmentation probabilities, with optional TTA matching the final evaluation script."""
+    p0 = seg_model.predict(x_seg, verbose=0)[0, ..., 0]
+
+    if not SEG_USE_TTA:
+        return p0
+
+    x_lr = x_seg[:, :, ::-1, :]
+    p_lr = seg_model.predict(x_lr, verbose=0)[0, :, ::-1, 0]
+
+    x_ud = x_seg[:, ::-1, :, :]
+    p_ud = seg_model.predict(x_ud, verbose=0)[0, ::-1, :, 0]
+
+    x_lrud = x_seg[:, ::-1, ::-1, :]
+    p_lrud = seg_model.predict(x_lrud, verbose=0)[0, ::-1, ::-1, 0]
+
+    return ((p0 + p_lr + p_ud + p_lrud) / 4.0).astype(np.float32)
+
 def make_overlay(gray_img_01, bin_mask, alpha=0.42):
     base = (gray_img_01 * 255).astype(np.uint8)
     rgb = cv2.cvtColor(base, cv2.COLOR_GRAY2RGB)
@@ -3157,13 +3209,19 @@ def predict_scc_prob_from_gray_224(img_gray_224: np.ndarray, cls_model) -> float
 def run_segmentation(img_orig: np.ndarray) -> dict:
     seg_model, _ = load_models()
     img_256, x_seg = preprocess_for_segmentation(img_orig)
-    seg_pred = seg_model.predict(x_seg, verbose=0)[0, ..., 0]
-    bin_mask, components = postprocess_mask(
-        seg_pred,
-        SEG_THRESHOLD,
-        MIN_COMPONENT_AREA,
-        USE_LARGEST_CC,
-    )
+    seg_pred = predict_segmentation_probability(seg_model, x_seg)
+
+    if SEG_INFERENCE_MODE.upper() == "RAW":
+        bin_mask = (seg_pred >= SEG_THRESHOLD).astype(np.uint8)
+        components = extract_mask_components(bin_mask)
+    else:
+        bin_mask, components = postprocess_mask(
+            seg_pred,
+            SEG_THRESHOLD,
+            MIN_COMPONENT_AREA,
+            USE_LARGEST_CC,
+        )
+
     total_pixels = int(bin_mask.sum())
     overlay_img = make_overlay(img_256, bin_mask)
     mean_conf = float(seg_pred[bin_mask == 1].mean()) if np.any(bin_mask == 1) else 0.0
@@ -3177,7 +3235,10 @@ def run_segmentation(img_orig: np.ndarray) -> dict:
         "tumour_detected": total_pixels >= MIN_ACTIVE_PIXELS,
         "mean_mask_conf": mean_conf,
         "input_resolution": f"{img_orig.shape[1]}×{img_orig.shape[0]}",
-        "seg_postproc_note": f"threshold={SEG_THRESHOLD}, min_area={MIN_COMPONENT_AREA}, LCC={USE_LARGEST_CC}",
+        "seg_postproc_note": (
+            f"threshold={SEG_THRESHOLD}, mode={SEG_INFERENCE_MODE}, TTA={SEG_USE_TTA}, "
+            f"min_area={MIN_COMPONENT_AREA}, LCC={USE_LARGEST_CC}"
+        ),
     }
 
 def run_classification_direct(img_orig: np.ndarray) -> dict:
@@ -4013,7 +4074,7 @@ def render_segmentation_model_information():
             <div class="seg-top-label">Global Dice score</div>
             <div class="seg-top-value big">{GLOBAL_SEG_DICE}</div>
             <div class="seg-top-divider"></div>
-            <div class="seg-top-subtitle">Validation set</div>
+            <div class="seg-top-subtitle">{GLOBAL_SEG_EVAL_SET}</div>
         </div>
         <div class="seg-top-card">
             <div class="seg-top-label">Input</div>
@@ -4046,8 +4107,16 @@ def render_segmentation_model_information():
                     <td>{SEG_THRESHOLD:.2f}</td>
                 </tr>
                 <tr>
+                    <td>IoU / Precision / Recall</td>
+                    <td>{GLOBAL_SEG_IOU} / {GLOBAL_SEG_PRECISION} / {GLOBAL_SEG_RECALL}</td>
+                </tr>
+                <tr>
+                    <td>Subtype Dice</td>
+                    <td>ADC {GLOBAL_SEG_DICE_ADC} · SCC {GLOBAL_SEG_DICE_SCC}</td>
+                </tr>
+                <tr>
                     <td>Post-processing</td>
-                    <td>Connected component filtering</td>
+                    <td>{SEG_INFERENCE_MODE} inference; TTA={SEG_USE_TTA}</td>
                 </tr>
                 <tr>
                     <td>Purpose</td>
@@ -4062,7 +4131,7 @@ def render_segmentation_model_information():
         <div class="seg-details-content">
             <p><strong>Dice score:</strong> Measures the spatial overlap between the predicted tumour mask and the reference annotation.</p>
             <p><strong>Interpretation:</strong> A value of 1 indicates perfect overlap, while 0 indicates no overlap.</p>
-            <p><strong>Important note:</strong> In this application, the displayed Dice score corresponds to the global validation performance of the segmentation model, not to the individual uploaded image, because the uploaded image does not include a ground-truth mask.</p>
+            <p><strong>Important note:</strong> In this application, the displayed Dice score corresponds to the global test performance of the updated segmentation model, not to the individual uploaded image, because the uploaded image does not include a ground-truth mask.</p>
         </div>
     </details>
 </div>
