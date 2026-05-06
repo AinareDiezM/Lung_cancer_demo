@@ -244,17 +244,7 @@ header[data-testid="stHeader"] [data-testid="stToolbar"] {
     z-index: 999999 !important;
 }
 
-/* Keep the image fullscreen/close control on the left side. */
-button[title*="fullscreen"],
-button[aria-label*="fullscreen"],
-button[title*="Fullscreen"],
-button[aria-label*="Fullscreen"],
-button[title*="Exit"],
-button[aria-label*="Exit"],
-button[title*="Close"],
-button[aria-label*="Close"] {
-    right: auto !important;
-}
+/* Images are rendered as static HTML, so no fullscreen control is shown. */
 
 .block-container {
     padding-top: 0.10rem !important;
@@ -267,6 +257,37 @@ button[aria-label*="Close"] {
 
 div[data-testid="stImage"] img {
     border-radius: 18px;
+}
+
+.static-image-wrapper {
+    width: 100%;
+    background: #000000;
+    border-radius: 18px;
+    padding: clamp(0.45rem, 0.9vw, 0.8rem);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.static-analysis-image {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 10px;
+    object-fit: contain;
+    pointer-events: none;
+    cursor: default;
+}
+
+.static-image-caption {
+    margin-top: 0.45rem;
+    color: #d8e8f7;
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-align: center;
 }
 
 /* Global report download button style. Kept here so it remains blue even after reruns. */
@@ -299,46 +320,8 @@ div.stDownloadButton > button:focus {
 }
 
 
-/* Move Streamlit image enlarge/minimise controls away from the right toolbar.
-   The fullscreen viewer is rendered outside stImage in some Streamlit versions,
-   so the selectors below target both the normal image card and the fullscreen modal. */
-div[data-testid="stImage"] button[title*="fullscreen"],
-div[data-testid="stImage"] button[aria-label*="fullscreen"],
-div[data-testid="stImage"] button[title*="Fullscreen"],
-div[data-testid="stImage"] button[aria-label*="Fullscreen"],
-div[data-testid="stImage"] button[title*="full screen"],
-div[data-testid="stImage"] button[aria-label*="full screen"],
-div[data-testid="stImage"] button[title*="Full screen"],
-div[data-testid="stImage"] button[aria-label*="Full screen"],
-div[data-testid="stImage"] button[title*="Close"],
-div[data-testid="stImage"] button[aria-label*="Close"] {
-    left: 0.75rem !important;
-    right: auto !important;
-}
-
-/* Fullscreen image modal / enlarged-image controls */
-/* Disable Streamlit native image enlargement/fullscreen controls.
-   This removes the hover/click fullscreen behaviour from st.image outputs
-   so the visual result cards remain stable and do not overlap the Streamlit toolbar. */
-div[data-testid="stImage"] button,
-div[data-testid="stImage"] [role="button"],
-div[data-testid="stImage"] [data-testid="StyledFullScreenButton"],
-div[data-testid="stImage"] [aria-label*="fullscreen" i],
-div[data-testid="stImage"] [title*="fullscreen" i] {
-    display: none !important;
-    visibility: hidden !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
-}
-
-div[data-testid="stImage"] img {
-    pointer-events: none !important;
-    cursor: default !important;
-}
-
-div[data-testid="stImage"] {
-    cursor: default !important;
-}
+/* Image fullscreen is disabled by rendering analysis images as static HTML.
+   No global fullscreen-button rules are applied, so Plotly charts keep rendering normally. */
 
 section[data-testid="stFileUploaderDropzone"] {
     background: linear-gradient(180deg, #f9fbff 0%, #f4f8fd 100%);
@@ -3190,9 +3173,24 @@ def end_session():
 # HELPERS
 # =========================================================
 def show_image(img, caption=""):
-    # width="stretch" is the current Streamlit parameter. The compatibility
-    # wrapper above keeps older local environments working.
-    st.image(img, caption=caption, width="stretch")
+    """Display analysis images without Streamlit's native fullscreen control."""
+    src = _image_to_data_uri(img)
+    if not src:
+        st.warning("Image could not be displayed.")
+        return
+
+    safe_caption = str(caption).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    caption_html = f'<div class="static-image-caption">{safe_caption}</div>' if safe_caption else ""
+
+    st.markdown(
+        f'''
+        <div class="static-image-wrapper">
+            <img src="{src}" class="static-analysis-image" alt="{safe_caption}" />
+            {caption_html}
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
 
 
 
