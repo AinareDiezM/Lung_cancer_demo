@@ -92,7 +92,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 
-SEG_MODEL_PATH = os.path.join(MODELS_DIR, "segmentationmodel.keras")
+SEG_MODEL_PATH = os.path.join(MODELS_DIR, "best_model_modelo30_dataset2.h5")
 FULL_CLS_MODEL_PATH = os.path.join(MODELS_DIR, "classificationmodel.keras")
 
 SEG_ICON_PATH = os.path.join(ASSETS_DIR, "segmentation_icon_crop.png")
