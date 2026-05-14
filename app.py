@@ -4326,18 +4326,90 @@ def _image_to_data_uri(img) -> str:
         return ""
 
     arr = np.asarray(img)
+
+    # Some internal images are stored as floats in [0, 1].
+    # If they are cast directly to uint8 they become almost black in the downloaded report.
     if arr.dtype != np.uint8:
+        arr = arr.astype(np.float32)
+        finite = arr[np.isfinite(arr)]
+        max_val = float(np.max(finite)) if finite.size else 0.0
+        min_val = float(np.min(finite)) if finite.size else 0.0
+
+        if max_val <= 1.5 and min_val >= 0.0:
+            arr = arr * 255.0
+
+        arr = np.nan_to_num(arr, nan=0.0, posinf=255.0, neginf=0.0)
         arr = np.clip(arr, 0, 255).astype(np.uint8)
 
     if arr.ndim == 2:
         pil_img = Image.fromarray(arr, mode="L")
     else:
-        pil_img = Image.fromarray(arr)
+        if arr.shape[-1] == 1:
+            pil_img = Image.fromarray(arr[..., 0], mode="L")
+        else:
+            pil_img = Image.fromarray(arr)
 
     buffer = io.BytesIO()
     pil_img.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{encoded}"
+
+
+def _report_probability_chart_html(prob_adc: float, prob_scc: float, title: str = "Subtype probabilities") -> str:
+    """Render a clean static SVG probability chart for the downloaded HTML report."""
+    adc = max(0.0, min(1.0, float(prob_adc or 0.0)))
+    scc = max(0.0, min(1.0, float(prob_scc or 0.0)))
+
+    width = 720
+    height = 310
+    left = 270
+    right = 65
+    top = 88
+    bar_h = 34
+    gap = 54
+    plot_w = width - left - right
+    y_scc = top
+    y_adc = top + bar_h + gap
+
+    def x_from_prob(v):
+        return left + (plot_w * v)
+
+    scc_w = max(2, plot_w * scc)
+    adc_w = max(2, plot_w * adc)
+
+    scc_pct = f"{scc * 100:.1f}%"
+    adc_pct = f"{adc * 100:.1f}%"
+    esc_title = _escape_html(title)
+
+    svg = f"""
+    <svg class="report-prob-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{esc_title}">
+        <rect x="0" y="0" width="{width}" height="{height}" rx="18" fill="#f8fafc"/>
+        <text x="28" y="36" fill="#102a43" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="800">{esc_title}</text>
+
+        <line x1="{left}" y1="66" x2="{left}" y2="230" stroke="#cbd5e1" stroke-width="1"/>
+        <line x1="{x_from_prob(0.5)}" y1="66" x2="{x_from_prob(0.5)}" y2="230" stroke="#e2e8f0" stroke-width="1"/>
+        <line x1="{x_from_prob(1.0)}" y1="66" x2="{x_from_prob(1.0)}" y2="230" stroke="#e2e8f0" stroke-width="1"/>
+
+        <text x="{left - 12}" y="{y_scc + 22}" text-anchor="end" fill="#475569" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Squamous Cell Carcinoma (SCC)</text>
+        <rect x="{left}" y="{y_scc}" width="{scc_w}" height="{bar_h}" rx="6" fill="#1f63bd"/>
+        <text x="{min(x_from_prob(scc) + 10, width - 46)}" y="{y_scc + 22}" fill="#102a43" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">{scc_pct}</text>
+
+        <text x="{left - 12}" y="{y_adc + 22}" text-anchor="end" fill="#475569" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Adenocarcinoma (ADC)</text>
+        <rect x="{left}" y="{y_adc}" width="{adc_w}" height="{bar_h}" rx="6" fill="#5f98d6"/>
+        <text x="{min(x_from_prob(adc) + 10, width - 46)}" y="{y_adc + 22}" fill="#102a43" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="800">{adc_pct}</text>
+
+        <text x="{left}" y="260" text-anchor="middle" fill="#64748b" font-family="Arial, Helvetica, sans-serif" font-size="12">0</text>
+        <text x="{x_from_prob(0.5)}" y="260" text-anchor="middle" fill="#64748b" font-family="Arial, Helvetica, sans-serif" font-size="12">0.5</text>
+        <text x="{x_from_prob(1.0)}" y="260" text-anchor="middle" fill="#64748b" font-family="Arial, Helvetica, sans-serif" font-size="12">1</text>
+        <text x="{left + plot_w / 2}" y="287" text-anchor="middle" fill="#475569" font-family="Arial, Helvetica, sans-serif" font-size="14" font-weight="700">Probability</text>
+    </svg>
+    """
+
+    return f"""
+        <div class="image-card report-static-prob-card">
+            {svg}
+        </div>
+    """
 
 
 def _report_rows_html(rows) -> str:
@@ -4405,7 +4477,14 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
     elif mode == "classification":
         subtitle = "Histological subtype prediction from the final classification workflow."
         if result.get("classification_performed", True):
-            images_html = _report_image_card("Classifier input", result.get("roi"))
+            images_html = (
+                _report_image_card("Original input", result.get("img_256"))
+                + _report_probability_chart_html(
+                    result.get("prob_adc", 0),
+                    result.get("prob_scc", 0),
+                    "Subtype probabilities",
+                )
+            )
             rows = [
                 ("Classification status", "Performed"),
                 ("Predicted subtype", result.get("pred_label", "—")),
@@ -4441,6 +4520,11 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
             + _report_image_card("Overlay", result.get("overlay_img"))
         )
         if result.get("classification_performed", True):
+            images_html += _report_probability_chart_html(
+                result.get("prob_adc_final", result.get("prob_adc", 0)),
+                result.get("prob_scc_final", result.get("prob_scc", 0)),
+                "Final subtype probabilities",
+            )
             rows = [
                 ("Tumour status", "Detected" if result.get("tumour_detected") else "Not detected"),
                 ("Classification status", "Performed"),
@@ -4471,6 +4555,11 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
             ]
 
     rows_html = _report_rows_html(rows)
+    visual_grid_class = "image-grid"
+    if mode == "classification":
+        visual_grid_class = "image-grid image-grid-classification"
+    elif mode == "pipeline":
+        visual_grid_class = "image-grid image-grid-pipeline"
 
     html = f'''<!DOCTYPE html>
 <html lang="en">
@@ -4493,10 +4582,25 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
     .section {{ margin-bottom: 28px; }}
     .section h2 {{ color: #102a43; margin: 0 0 8px 0; font-size: 22px; }}
     .section-subtitle {{ color: #64748b; margin: 0 0 18px 0; font-size: 14px; }}
-    .image-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
+    .image-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }}
+    .image-grid-classification {{ grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.75fr); max-width: 900px; }}
+    .image-grid-pipeline .report-prob-card {{ grid-column: span 2; }}
     .image-card {{ border: 1px solid #dbe7f3; border-radius: 16px; background: #f8fafc; padding: 12px; text-align: center; }}
     .image-title {{ font-size: 13px; color: #475569; font-weight: 700; margin-bottom: 10px; }}
     .image-card img {{ max-width: 100%; border-radius: 12px; background: #0f172a; }}
+    .probability-card {{ text-align: left; }}
+    .report-static-prob-card {{ padding: 0; min-height: 328px; display: flex; align-items: center; justify-content: center; background: #f8fafc; border-color: #d6e5f4; overflow: hidden; }}
+    .report-prob-svg {{ width: 100%; height: 328px; display: block; }}
+    .report-prob-card {{ padding: 30px 28px; display: flex; flex-direction: column; justify-content: center; min-height: 318px; }}
+    .report-prob-title {{ margin: 0 0 26px 0; text-align: left; color: #102a43; font-size: 17px; font-weight: 800; }}
+    .report-prob-row {{ margin-bottom: 30px; }}
+    .report-prob-row:last-child {{ margin-bottom: 0; }}
+    .report-prob-label {{ display: flex; justify-content: space-between; align-items: baseline; gap: 16px; margin-bottom: 10px; color: #102a43; font-size: 14px; font-weight: 800; line-height: 1.25; }}
+    .report-prob-label strong {{ flex: 0 0 auto; font-size: 17px; color: #061a33; font-weight: 900; }}
+    .report-prob-track {{ width: 100%; height: 18px; background: #e8f1fa; border: 1px solid #d4e3f2; border-radius: 999px; overflow: hidden; }}
+    .report-prob-fill {{ height: 100%; border-radius: 999px; }}
+    .report-prob-fill-adc {{ background: #5f98d6; }}
+    .report-prob-fill-scc {{ background: #1f63bd; }}
     table {{ width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 16px; }}
     th {{ text-align: left; background: #102a43; color: white; padding: 12px 14px; font-size: 13px; }}
     td {{ border-bottom: 1px solid #e5edf5; padding: 11px 14px; font-size: 13px; }}
@@ -4524,7 +4628,7 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
         <div class="section">
             <h2>Visual results</h2>
             <p class="section-subtitle">Images generated from the current uploaded case.</p>
-            <div class="image-grid">{images_html}</div>
+            <div class="{visual_grid_class}">{images_html}</div>
         </div>
         <div class="section">
             <h2>Result summary</h2>
@@ -4562,12 +4666,38 @@ def render_report_download(mode: str, result: dict):
         unsafe_allow_html=True,
     )
 
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stDownloadButton"] > button {
+            background: linear-gradient(135deg, #4667f0 0%, #3148c7 100%) !important;
+            color: #ffffff !important;
+            border: 0 !important;
+            border-radius: 14px !important;
+            font-weight: 800 !important;
+            box-shadow: 0 12px 28px rgba(49, 72, 199, 0.22) !important;
+        }
+        div[data-testid="stDownloadButton"] > button:hover {
+            background: linear-gradient(135deg, #5574ff 0%, #334bd0 100%) !important;
+            color: #ffffff !important;
+            border: 0 !important;
+        }
+        div[data-testid="stDownloadButton"] > button * {
+            color: #ffffff !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.download_button(
         label=label,
         data=build_analysis_report_html(mode, result),
         file_name=filename,
         mime="text/html",
         key=f"download_{mode}_report",
+        type="primary",
+        use_container_width=True,
     )
 
 
