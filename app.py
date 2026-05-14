@@ -4584,7 +4584,7 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
     .section-subtitle {{ color: #64748b; margin: 0 0 18px 0; font-size: 14px; }}
     .image-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: stretch; }}
     .image-grid-classification {{ grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.75fr); max-width: 900px; }}
-    .image-grid-pipeline .report-prob-card {{ grid-column: span 2; }}
+    .image-grid-pipeline .report-static-prob-card {{ grid-column: 1 / -1; max-width: 760px; width: 100%; }}
     .image-card {{ border: 1px solid #dbe7f3; border-radius: 16px; background: #f8fafc; padding: 12px; text-align: center; }}
     .image-title {{ font-size: 13px; color: #475569; font-weight: 700; margin-bottom: 10px; }}
     .image-card img {{ max-width: 100%; border-radius: 12px; background: #0f172a; }}
