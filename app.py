@@ -44,20 +44,9 @@ if not hasattr(st, "_tfg_original_image"):
     st._tfg_original_image = st.image
 
 def _image_compat(*args, **kwargs):
-    # Prefer the current Streamlit API to avoid deprecation warnings.
-    # Fall back to the older parameter only when the installed version needs it.
-    use_container = kwargs.pop("use_container_width", None)
-    if use_container is not None and "width" not in kwargs and "use_column_width" not in kwargs:
-        kwargs["width"] = "stretch" if use_container else "content"
-    try:
-        return st._tfg_original_image(*args, **kwargs)
-    except TypeError as e:
-        if "unexpected keyword argument 'width'" in str(e):
-            width_value = kwargs.pop("width", None)
-            if width_value == "stretch":
-                kwargs["use_column_width"] = True
-            return st._tfg_original_image(*args, **kwargs)
-        raise
+    if "use_container_width" in kwargs:
+        kwargs["use_column_width"] = kwargs.pop("use_container_width")
+    return st._tfg_original_image(*args, **kwargs)
 
 st.image = _image_compat
 
@@ -102,6 +91,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+DEMO_CASES_DIR = os.path.join(ASSETS_DIR, "demo_cases")
 
 SEG_MODEL_PATH = os.path.join(MODELS_DIR, "best_model_modelo30_dataset2.h5")
 FULL_CLS_MODEL_PATH = os.path.join(MODELS_DIR, "classificationmodel.keras")
@@ -228,24 +218,6 @@ header[data-testid="stHeader"] {
     height: 0;
 }
 
-/* Keep Streamlit's image fullscreen control clickable.
-   Only the Deploy button is hidden; the toolbar itself is not disabled because
-   Streamlit also uses it for the image fullscreen/minimise control. */
-div[data-testid="stDeployButton"],
-.stDeployButton {
-    display: none !important;
-    visibility: hidden !important;
-}
-
-div[data-testid="stToolbar"],
-header[data-testid="stHeader"] div[data-testid="stToolbar"],
-header[data-testid="stHeader"] [data-testid="stToolbar"] {
-    pointer-events: auto !important;
-    z-index: 999999 !important;
-}
-
-/* Images are rendered as static HTML, so no fullscreen control is shown. */
-
 .block-container {
     padding-top: 0.10rem !important;
     padding-bottom: clamp(1.6rem, 2.2vw, 2.4rem);
@@ -258,70 +230,6 @@ header[data-testid="stHeader"] [data-testid="stToolbar"] {
 div[data-testid="stImage"] img {
     border-radius: 18px;
 }
-
-.static-image-wrapper {
-    width: 100%;
-    background: #000000;
-    border-radius: 18px;
-    padding: clamp(0.45rem, 0.9vw, 0.8rem);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-}
-
-.static-analysis-image {
-    width: 100%;
-    max-width: 100%;
-    height: auto;
-    display: block;
-    border-radius: 10px;
-    object-fit: contain;
-    pointer-events: none;
-    cursor: default;
-}
-
-.static-image-caption {
-    margin-top: 0.45rem;
-    color: #d8e8f7;
-    font-size: 0.82rem;
-    font-weight: 600;
-    text-align: center;
-}
-
-/* Global report download button style. Kept here so it remains blue even after reruns. */
-div.stDownloadButton > button {
-    width: 100%;
-    border-radius: 14px;
-    border: 1px solid rgba(16, 42, 67, 0.22);
-    background: linear-gradient(135deg, #102a43 0%, #1d4e89 100%) !important;
-    color: #ffffff !important;
-    font-weight: 800;
-    font-size: 0.96rem;
-    padding: 0.78rem 1.1rem;
-    box-shadow: 0 12px 26px rgba(16, 42, 67, 0.22);
-    transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
-}
-div.stDownloadButton > button:hover {
-    transform: translateY(-1px);
-    filter: brightness(1.03);
-    box-shadow: 0 16px 34px rgba(16, 42, 67, 0.30);
-    border-color: rgba(29, 78, 137, 0.42);
-    color: #ffffff !important;
-}
-div.stDownloadButton > button:active {
-    transform: translateY(0);
-    box-shadow: 0 8px 20px rgba(16, 42, 67, 0.20);
-}
-div.stDownloadButton > button:focus {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(29, 78, 137, 0.18), 0 12px 26px rgba(16, 42, 67, 0.22);
-}
-
-
-/* Image fullscreen is disabled by rendering analysis images as static HTML.
-   No global fullscreen-button rules are applied, so Plotly charts keep rendering normally. */
 
 section[data-testid="stFileUploaderDropzone"] {
     background: linear-gradient(180deg, #f9fbff 0%, #f4f8fd 100%);
@@ -2747,28 +2655,6 @@ div[data-testid="stVerticalBlock"]:has(.login-only-single-card-anchor) .login-st
     background-repeat: no-repeat !important;
 }
 
-
-/* Authoritative blue styling for report download buttons. */
-div.stDownloadButton > button {
-    width: 100% !important;
-    border-radius: 14px !important;
-    border: 1px solid rgba(15, 42, 67, 0.28) !important;
-    background: linear-gradient(135deg, #143B5D 0%, #1D4E89 100%) !important;
-    color: #ffffff !important;
-    font-weight: 800 !important;
-    font-size: 0.95rem !important;
-    padding: 0.78rem 1.15rem !important;
-    box-shadow: 0 12px 26px rgba(15, 42, 67, 0.20) !important;
-    transition: all 0.18s ease !important;
-}
-div.stDownloadButton > button:hover {
-    transform: translateY(-1px) !important;
-    box-shadow: 0 16px 32px rgba(15, 42, 67, 0.26) !important;
-    border-color: rgba(29, 78, 137, 0.48) !important;
-}
-div.stDownloadButton > button:active {
-    transform: translateY(0) !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3173,24 +3059,7 @@ def end_session():
 # HELPERS
 # =========================================================
 def show_image(img, caption=""):
-    """Display analysis images without Streamlit's native fullscreen control."""
-    src = _image_to_data_uri(img)
-    if not src:
-        st.warning("Image could not be displayed.")
-        return
-
-    safe_caption = str(caption).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    caption_html = f'<div class="static-image-caption">{safe_caption}</div>' if safe_caption else ""
-
-    st.markdown(
-        f'''
-        <div class="static-image-wrapper">
-            <img src="{src}" class="static-analysis-image" alt="{safe_caption}" />
-            {caption_html}
-        </div>
-        ''',
-        unsafe_allow_html=True,
-    )
+    st.image(img, caption=caption, use_container_width=True)
 
 
 
@@ -3576,32 +3445,95 @@ def render_analysis_header(meta: dict):
     )
 
 def render_sidebar_upload(mode_label: str):
-    st.markdown('<div class="upload-panel-anchor"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-section-title">Upload image</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="sidebar-section-sub">Upload one PNG MRI image and run the {mode_label.lower()} workflow.</div>',
-        unsafe_allow_html=True,
-    )
-    uploaded_file = st.file_uploader(
-        "Choose input image",
-        type=["png"],
-        label_visibility="collapsed",
-        help="Upload a single PNG MRI image for analysis.",
-        key="uploader",
-    )
-    if uploaded_file is not None:
-        st.success("Image uploaded successfully.")
+    """Render the manual upload card and return the uploaded file."""
+    with st.container():
+        st.markdown('<div class="upload-panel-anchor"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">Upload image</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="sidebar-section-sub">Upload one PNG MRI image and run the {mode_label.lower()} workflow.</div>',
+            unsafe_allow_html=True,
+        )
+        uploaded_file = st.file_uploader(
+            "Choose input image",
+            type=["png"],
+            label_visibility="collapsed",
+            help="Upload a single PNG MRI image for analysis.",
+            key="uploader",
+        )
+        if uploaded_file is not None:
+            st.success("Image uploaded successfully.")
 
-    st.markdown('<div class="save-metrics-helper"></div>', unsafe_allow_html=True)
-    st.session_state.save_metrics_opt_in = st.checkbox(
-        "Save anonymised case metrics for academic evaluation",
-        value=st.session_state.get("save_metrics_opt_in", False),
-        help="Optional. Uploaded images are never stored. If enabled, only anonymised numerical outputs are recorded in analysis_log.csv.",
-        key="save_metrics_checkbox",
-    )
+    return uploaded_file
 
-    run_clicked = st.button("Run analysis", type="primary", use_container_width=True)
-    return uploaded_file, run_clicked
+
+def list_demo_cases():
+    """Return the available preloaded demo images from assets/demo_cases."""
+    if not os.path.exists(DEMO_CASES_DIR):
+        return []
+
+    valid_ext = (".png", ".jpg", ".jpeg")
+    files = [
+        f for f in os.listdir(DEMO_CASES_DIR)
+        if f.lower().endswith(valid_ext)
+    ]
+    files.sort()
+    return files
+
+
+def render_demo_cases():
+    """Render the preloaded demo case selector card."""
+    with st.container():
+        st.markdown('<div class="upload-panel-anchor"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-section-title">Example MRI Cases</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="sidebar-section-sub">Use preloaded anonymised MRI examples prepared for live demonstration.</div>',
+            unsafe_allow_html=True,
+        )
+
+        demo_files = list_demo_cases()
+        if not demo_files:
+            st.info("No demo cases available.")
+            return st.session_state.get("demo_image_path", None)
+
+        selected_demo = st.selectbox(
+            "Select demo case",
+            demo_files,
+            label_visibility="collapsed",
+            key="demo_case_selector",
+        )
+
+        load_demo = st.button(
+            "Load demo image",
+            key="btn_load_demo_case",
+            use_container_width=True,
+        )
+
+        if load_demo:
+            demo_path = os.path.join(DEMO_CASES_DIR, selected_demo)
+            st.session_state.demo_image_path = demo_path
+            st.session_state.demo_image_name = selected_demo
+            st.session_state.analysis_done = False
+            st.session_state.analysis_result = None
+            st.session_state.run_now = False
+            st.success(f"Demo image loaded: {selected_demo}")
+
+    return st.session_state.get("demo_image_path", None)
+
+
+def render_sidebar_controls():
+    """Render the optional logging checkbox and the run button."""
+    with st.container():
+        st.markdown('<div class="upload-panel-anchor"></div>', unsafe_allow_html=True)
+        st.session_state.save_metrics_opt_in = st.checkbox(
+            "Save anonymised case metrics for academic evaluation",
+            value=st.session_state.get("save_metrics_opt_in", False),
+            help="Optional. Uploaded images are never stored. If enabled, only anonymised numerical outputs are recorded in analysis_log.csv.",
+            key="save_metrics_checkbox",
+        )
+        run_clicked = st.button("Run analysis", type="primary", use_container_width=True)
+
+    return run_clicked
+
 
 def render_summary_panel(mode: str, result: Optional[dict]):
     st.markdown('<div class="summary-panel-anchor"></div>', unsafe_allow_html=True)
@@ -4387,57 +4319,20 @@ def _escape_html(value) -> str:
 
 
 def _image_to_data_uri(img) -> str:
-    """Convert a NumPy/PIL image into an embedded PNG for the HTML report.
-
-    The report is opened in different browsers/PDF viewers, and some of them
-    render transparent PNG areas as black. To avoid this, every exported image
-    is flattened to RGB on a white background before being embedded.
-    """
+    """Convert a NumPy/PIL image into an embedded PNG for the HTML report."""
     import io
 
     if img is None:
         return ""
 
     arr = np.asarray(img)
-
-    # Streamlit visual arrays in this app may be stored either as 0-255 images
-    # or as normalised 0-1 floats. Exporting 0-1 floats directly makes the
-    # image almost black in the downloaded HTML report, so normalise safely.
     if arr.dtype != np.uint8:
-        arr = arr.astype(np.float32)
-        finite = np.isfinite(arr)
-        if finite.any():
-            arr_min = float(np.nanmin(arr[finite]))
-            arr_max = float(np.nanmax(arr[finite]))
-        else:
-            arr_min, arr_max = 0.0, 0.0
-
-        if arr_max <= 1.5 and arr_min >= 0.0:
-            arr = arr * 255.0
-        elif arr_max > arr_min and (arr_min < 0.0 or arr_max > 255.0):
-            arr = (arr - arr_min) / (arr_max - arr_min) * 255.0
-
-        arr = np.nan_to_num(arr, nan=0.0, posinf=255.0, neginf=0.0)
         arr = np.clip(arr, 0, 255).astype(np.uint8)
 
     if arr.ndim == 2:
-        pil_img = Image.fromarray(arr, mode="L").convert("RGB")
+        pil_img = Image.fromarray(arr, mode="L")
     else:
-        if arr.ndim == 3 and arr.shape[-1] == 1:
-            arr = arr[..., 0]
-            pil_img = Image.fromarray(arr, mode="L").convert("RGB")
-        elif arr.ndim == 3 and arr.shape[-1] >= 4:
-            pil_img = Image.fromarray(arr[..., :4])
-        else:
-            pil_img = Image.fromarray(arr[..., :3])
-
-        if pil_img.mode in ("RGBA", "LA") or (pil_img.mode == "P" and "transparency" in pil_img.info):
-            white_bg = Image.new("RGB", pil_img.size, (255, 255, 255))
-            rgba = pil_img.convert("RGBA")
-            white_bg.paste(rgba, mask=rgba.getchannel("A"))
-            pil_img = white_bg
-        else:
-            pil_img = pil_img.convert("RGB")
+        pil_img = Image.fromarray(arr)
 
     buffer = io.BytesIO()
     pil_img.save(buffer, format="PNG")
@@ -4577,34 +4472,6 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
 
     rows_html = _report_rows_html(rows)
 
-    result_highlight_html = ""
-    if mode == "classification" and result.get("classification_performed", True):
-        result_highlight_html = f'''
-        <div class="result-highlight">
-            <div>
-                <div class="result-kicker">Predicted subtype</div>
-                <div class="result-value">{_escape_html(result.get("pred_label", "—"))}</div>
-            </div>
-            <div>
-                <div class="result-kicker">Confidence</div>
-                <div class="result-value small">{_escape_html(f"{result.get('pred_conf', 0) * 100:.2f}%")}</div>
-            </div>
-        </div>
-        '''
-    elif mode == "pipeline" and result.get("classification_performed", True):
-        result_highlight_html = f'''
-        <div class="result-highlight">
-            <div>
-                <div class="result-kicker">Final subtype</div>
-                <div class="result-value">{_escape_html(result.get("pred_label", "—"))}</div>
-            </div>
-            <div>
-                <div class="result-kicker">Final confidence</div>
-                <div class="result-value small">{_escape_html(f"{result.get('pred_conf', 0) * 100:.2f}%")}</div>
-            </div>
-        </div>
-        '''
-
     html = f'''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4626,10 +4493,6 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
     .section {{ margin-bottom: 28px; }}
     .section h2 {{ color: #102a43; margin: 0 0 8px 0; font-size: 22px; }}
     .section-subtitle {{ color: #64748b; margin: 0 0 18px 0; font-size: 14px; }}
-    .result-highlight {{ display: flex; justify-content: space-between; align-items: center; gap: 18px; margin: 0 0 28px 0; padding: 22px 26px; border-radius: 20px; background: linear-gradient(135deg, #f3e8ff 0%, #eef2ff 100%); border: 1px solid #ddd6fe; }}
-    .result-kicker {{ color: #6b21a8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px; }}
-    .result-value {{ color: #581c87; font-size: 34px; line-height: 1.05; font-weight: 800; }}
-    .result-value.small {{ font-size: 28px; text-align: right; }}
     .image-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }}
     .image-card {{ border: 1px solid #dbe7f3; border-radius: 16px; background: #f8fafc; padding: 12px; text-align: center; }}
     .image-title {{ font-size: 13px; color: #475569; font-weight: 700; margin-bottom: 10px; }}
@@ -4658,7 +4521,6 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
         <div class="meta-card"><div class="meta-label">Use</div><div class="meta-value">{_escape_html(badge_text)}</div></div>
     </div>
     <div class="content">
-        {result_highlight_html}
         <div class="section">
             <h2>Visual results</h2>
             <p class="section-subtitle">Images generated from the current uploaded case.</p>
@@ -4684,97 +4546,19 @@ def build_analysis_report_html(mode: str, result: dict) -> bytes:
 
 
 def render_report_download(mode: str, result: dict):
-    """Render a polished report export card and a mode-specific download button."""
+    """Render a small report card and a mode-specific download button."""
     labels = {
         "segmentation": ("Download segmentation report", "segmentation_report.html"),
         "classification": ("Download classification report", "classification_report.html"),
-        "pipeline": ("Download complete pipeline report", "complete_pipeline_report.html"),
-    }
-    descriptions = {
-        "segmentation": "Export the uploaded image, predicted mask, overlay and tumour segmentation metrics.",
-        "classification": "Export the classifier input, predicted subtype, confidence and probability values.",
-        "pipeline": "Export the complete analysis: tumour localisation, subtype prediction and final summary.",
+        "pipeline": ("Download complete report", "complete_pipeline_report.html"),
     }
     label, filename = labels.get(mode, ("Download report", "analysis_report.html"))
-    description = descriptions.get(mode, "Export the current analysis results as a simple academic report.")
 
     st.markdown(
-        f"""
-        <style>
-            .report-export-card {{
-                margin-top: 1.45rem;
-                margin-bottom: 0.72rem;
-                padding: 1.05rem 1.15rem;
-                border: 1px solid #dbe7f3;
-                border-radius: 18px;
-                background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
-                box-shadow: 0 10px 26px rgba(18, 42, 76, 0.055);
-                display: flex;
-                align-items: center;
-                gap: 0.95rem;
-            }}
-            .report-export-icon {{
-                width: 44px;
-                height: 44px;
-                border-radius: 14px;
-                background: linear-gradient(135deg, #eaf4ff 0%, #dbeafe 100%);
-                color: #1d4ed8;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                font-size: 1.25rem;
-                font-weight: 900;
-                flex: 0 0 auto;
-            }}
-            .report-export-title {{
-                color: #102a43;
-                font-size: 1.02rem;
-                font-weight: 850;
-                letter-spacing: -0.01em;
-                margin-bottom: 0.18rem;
-            }}
-            .report-export-text {{
-                color: #64748b;
-                font-size: 0.88rem;
-                line-height: 1.42;
-                margin: 0;
-            }}
-            div.stDownloadButton > button {{
-                width: 100%;
-                border-radius: 14px;
-                border: 1px solid rgba(16, 42, 67, 0.22);
-                background: linear-gradient(135deg, #102a43 0%, #1d4e89 100%);
-                color: #ffffff;
-                font-weight: 800;
-                font-size: 0.96rem;
-                padding: 0.78rem 1.1rem;
-                box-shadow: 0 12px 26px rgba(16, 42, 67, 0.22);
-                transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
-            }}
-            div.stDownloadButton > button:hover {{
-                transform: translateY(-1px);
-                filter: brightness(1.02);
-                box-shadow: 0 16px 34px rgba(16, 42, 67, 0.30);
-                border-color: rgba(29, 78, 137, 0.42);
-                color: #ffffff;
-            }}
-            div.stDownloadButton > button:active {{
-                transform: translateY(0);
-                box-shadow: 0 8px 20px rgba(16, 42, 67, 0.20);
-            }}
-            div.stDownloadButton > button:focus {{
-                outline: none;
-                box-shadow: 0 0 0 3px rgba(29, 78, 137, 0.18), 0 12px 26px rgba(16, 42, 67, 0.22);
-            }}
-        </style>
-        <div class="report-export-card">
-            <div class="report-export-icon">↓</div>
-            <div>
-                <div class="report-export-title">Report ready</div>
-                <p class="report-export-text">{_escape_html(description)}</p>
-            </div>
-        </div>
-        """,
+        '''<div style="margin-top:1.4rem; padding:1.1rem 1.25rem; border:1px solid #dbe7f3; border-radius:18px; background:#ffffff; box-shadow:0 8px 22px rgba(18,42,76,0.035);">
+            <div style="font-weight:800; color:#102a43; font-size:1.02rem;">Download report</div>
+            <div style="color:#64748b; font-size:0.88rem; margin-top:0.25rem;">A simple HTML report will be generated using the current results shown on this page. You can open it in any browser or save it as PDF using Print - Save as PDF.</div>
+        </div>''',
         unsafe_allow_html=True,
     )
 
@@ -5633,6 +5417,7 @@ def page_analysis():
             st.session_state.page = "home"
             st.session_state.analysis_done = False
             st.session_state.analysis_result = None
+            st.session_state.run_now = False
             st.rerun()
     with top_right:
         render_analysis_header(meta)
@@ -5640,26 +5425,33 @@ def page_analysis():
     sidebar_col, main_col = st.columns([0.27, 0.73], gap="large")
 
     with sidebar_col:
-        uploaded_file, run_clicked = render_sidebar_upload(meta["label"])
+        uploaded_file = render_sidebar_upload(meta["label"])
+        demo_image_path = render_demo_cases()
+        run_clicked = render_sidebar_controls()
 
         img_orig = None
+        input_source = None
+
         if uploaded_file is not None:
             img_orig = read_uploaded_image(uploaded_file)
+            input_source = "uploaded"
+        elif demo_image_path is not None and os.path.exists(demo_image_path):
+            img_orig = np.array(Image.open(demo_image_path).convert("L"))
+            input_source = "demo"
 
         if run_clicked:
-            if uploaded_file is None:
-                st.warning("Please upload a PNG image before running the analysis.")
+            if img_orig is None:
+                st.warning("Please upload a PNG image or load an example MRI case before running the analysis.")
             else:
                 st.session_state.run_now = True
 
-
     with main_col:
-        if uploaded_file is None:
+        if img_orig is None:
             render_section_intro(
                 "Analysis workspace",
                 "The uploaded image and the model outputs will appear here once the selected workflow is executed."
             )
-            st.info("System ready. Upload a PNG image and press **▶ Run Analysis** to start.")
+            st.info("System ready. Upload a PNG image or load an example MRI case, then press **▶ Run Analysis** to start.")
         else:
             if st.session_state.get("run_now", False) and img_orig is not None:
                 st.session_state.run_now = False
@@ -5670,9 +5462,10 @@ def page_analysis():
             else:
                 render_section_intro(
                     "Input preview",
-                    "Review the uploaded MRI image before executing the selected AI workflow."
+                    "Review the selected MRI image before executing the selected AI workflow."
                 )
-                render_visual_card("Input image", img_orig, "Uploaded image preview", large=True)
+                preview_caption = "Uploaded image preview" if input_source == "uploaded" else "Preloaded demo case preview"
+                render_visual_card("Input image", img_orig, preview_caption, large=True)
 
     footer()
 
